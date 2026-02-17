@@ -73,13 +73,14 @@ router.post('/', async (req, res) => {
     const maxHrs = employment_type === 'coop' ? 40 :
                    employment_type === 'external_coop' ? 14 : 20;
 
-    const [id] = await db('employees').insert({
+    const [inserted] = await db('employees').insert({
       name,
       employment_type: employment_type || 'part_time',
       is_trainee: is_trainee || false,
       role: serializeRoles(roles),
       max_hours: max_hours || maxHrs,
-    });
+    }).returning('id');
+    const id = typeof inserted === 'object' ? inserted.id : inserted;
 
     // Initialize availability (all available by default)
     const avail = [];
