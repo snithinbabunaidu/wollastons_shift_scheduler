@@ -52,7 +52,8 @@ function buildDaySlots(shiftConfigs, settingsMap, slotCounts, existingLocked) {
       for (let slotIdx = 0; slotIdx < slotsNeeded; slotIdx++) {
         const config = periodConfigs[slotIdx] || periodConfigs[periodConfigs.length - 1];
         const shiftHours = calcHours(config.start_time, config.end_time);
-        const isManagerSlot = MANAGER_START_TIMES[period] && MANAGER_START_TIMES[period].includes(config.start_time);
+        // Only slot 0 per period is the designated manager slot
+        const isManagerSlot = slotIdx === 0;
 
         const lockedEntry = existingLocked.find(
           e => e.day_of_week === day && e.shift_period === period && e.slot_index === slotIdx
@@ -74,23 +75,35 @@ function buildDaySlots(shiftConfigs, settingsMap, slotCounts, existingLocked) {
   return daySlots;
 }
 
-// Check if an employee can work a specific slot (strict manager rules)
+// Check if an employee can work a specific slot
+// Rules: slot 0 = manager slot (prefer managers there), slots 1+ = open to anyone
+// Managers can work ANY slot in their period, non-managers can work any slot
+// In strict mode: non-managers blocked from slot 0, managers restricted to their period
+// In relaxed mode: anyone can fill any slot
 function canEmployeeWorkSlot(emp, slot, relaxManager) {
   const hasAnyManagerRole = emp.roles.some(r => r.endsWith('_manager'));
+
+  if (relaxManager) {
+    // Relaxed: managers can work any slot in their period, non-managers can fill anything
+    if (!hasAnyManagerRole) return true;
+    // Managers: allow any slot in their manager period
+    return emp.roles.some(r => {
+      if (!r.endsWith('_manager')) return false;
+      return r.replace('_manager', '') === slot.period;
+    });
+  }
+
+  // Strict mode
   if (!hasAnyManagerRole) {
-    // Non-managers cannot work manager-designated slots
+    // Non-managers can work any slot EXCEPT slot 0 (manager slot)
     if (slot.isManagerSlot) return false;
     return true;
   }
 
-  // Managers can ONLY work slots matching their manager roles
+  // Managers can work ANY slot in their manager period
   return emp.roles.some(r => {
     if (!r.endsWith('_manager')) return false;
-    const managerPeriod = r.replace('_manager', '');
-    if (relaxManager && (managerPeriod === 'afternoon' || managerPeriod === 'night')) {
-      return managerPeriod === slot.period;
-    }
-    return managerPeriod === slot.period && MANAGER_START_TIMES[managerPeriod].includes(slot.config.start_time);
+    return r.replace('_manager', '') === slot.period;
   });
 }
 
@@ -856,7 +869,7 @@ async function autoGenerate(weekStart) {
       period: a.shift_period,
       slotIdx: a.slot_index,
       shiftHours,
-      isManagerSlot: MANAGER_START_TIMES[a.shift_period] && MANAGER_START_TIMES[a.shift_period].includes(a.start_time),
+      isManagerSlot: a.slot_index === 0,
       config: { start_time: a.start_time, end_time: a.end_time },
     };
 
