@@ -178,7 +178,7 @@ function countEligibleForDay(day, employees, eligibility, daysAssigned, hoursUse
   return count;
 }
 
-function getRankedCandidatesForDay(day, employees, eligibility, daysAssigned, hoursUsed, shiftsAssigned, daySlots) {
+function getRankedCandidatesForDay(day, employees, eligibility, daysAssigned, hoursUsed, shiftsAssigned, daySlots, orderDaysMap) {
   const candidates = [];
   for (const emp of employees) {
     if (daysAssigned[emp.id].has(day)) continue;
@@ -210,6 +210,13 @@ function getRankedCandidatesForDay(day, employees, eligibility, daysAssigned, ho
     const hasManagerSlotOnDay = daySlots[day].some(s => s.isManagerSlot && !s.isLocked &&
       canEmployeeWorkSlot(emp, s, false));
     if (hasManagerSlotOnDay) score += 300;
+
+    // Food order employee on order day — must be here to place orders
+    if (orderDaysMap) {
+      const isFoodOrderEmp = emp.roles.includes('ag_food_order') || emp.roles.includes('us_food_order');
+      const isOrderDay = orderDaysMap.ag.includes(day) || orderDaysMap.us.includes(day);
+      if (isFoodOrderEmp && isOrderDay) score += 800;
+    }
 
     // Remaining capacity as a fraction of max (treats 13/20 and 26/40 equally)
     const remaining = emp.max_hours - hoursUsed[emp.id];
@@ -292,7 +299,7 @@ function checkFeasibility(dayAllocation, slotsPerDay, employees, eligibility, da
 }
 
 function allocateEmployeesToDays(dayAllocation, slotsPerDay, employees, daySlots, eligibility,
-  hoursUsed, shiftsAssigned, daysAssigned) {
+  hoursUsed, shiftsAssigned, daysAssigned, orderDaysMap) {
   const BACKTRACK_LIMIT = 500;
   let backtracks = 0;
 
@@ -320,7 +327,7 @@ function allocateEmployeesToDays(dayAllocation, slotsPerDay, employees, daySlots
     if (bestDay === -1) break; // All days filled
 
     const day = bestDay;
-    const candidates = getRankedCandidatesForDay(day, employees, eligibility, daysAssigned, hoursUsed, shiftsAssigned, daySlots);
+    const candidates = getRankedCandidatesForDay(day, employees, eligibility, daysAssigned, hoursUsed, shiftsAssigned, daySlots, orderDaysMap);
 
     let assigned = false;
     for (const candidate of candidates) {
@@ -811,7 +818,7 @@ async function autoGenerate(weekStart) {
   }
 
   allocateEmployeesToDays(dayAllocation, slotsPerDay, employees, daySlots, eligibility,
-    phase1Hours, phase1Shifts, phase1Days);
+    phase1Hours, phase1Shifts, phase1Days, orderDaysMap);
 
   // ═══ PHASE 1C: Hour budget optimization ═══
   const targetHours = optimizeHourBudgets(dayAllocation, employees, daySlots, eligibility);
