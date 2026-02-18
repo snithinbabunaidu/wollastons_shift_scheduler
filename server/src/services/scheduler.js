@@ -52,8 +52,9 @@ function buildDaySlots(shiftConfigs, settingsMap, slotCounts, existingLocked) {
       for (let slotIdx = 0; slotIdx < slotsNeeded; slotIdx++) {
         const config = periodConfigs[slotIdx] || periodConfigs[periodConfigs.length - 1];
         const shiftHours = calcHours(config.start_time, config.end_time);
-        // Only slot 0 per period is the designated manager slot
-        const isManagerSlot = slotIdx === 0;
+        // Only slot 0 for afternoon/night is the designated manager slot
+        // Morning slot 0 stays open for food order employees
+        const isManagerSlot = slotIdx === 0 && period !== 'morning';
 
         const lockedEntry = existingLocked.find(
           e => e.day_of_week === day && e.shift_period === period && e.slot_index === slotIdx
@@ -869,7 +870,7 @@ async function autoGenerate(weekStart) {
       period: a.shift_period,
       slotIdx: a.slot_index,
       shiftHours,
-      isManagerSlot: a.slot_index === 0,
+      isManagerSlot: a.slot_index === 0 && a.shift_period !== 'morning',
       config: { start_time: a.start_time, end_time: a.end_time },
     };
 
