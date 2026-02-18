@@ -3,6 +3,7 @@ import {
   Box, Typography, Button, Select, MenuItem, IconButton, Chip, Alert, Stack,
   Dialog, DialogTitle, DialogContent, DialogActions, Tooltip, CircularProgress,
   TextField, Popover, Card, CardContent, Divider, Paper, FormControl, InputLabel,
+  Autocomplete,
 } from '@mui/material';
 import {
   ChevronLeft, ChevronRight, AutoFixHigh, PictureAsPdf, Save,
@@ -543,42 +544,59 @@ export default function SchedulePage() {
                                 {fmt(times.start_time)}
                               </Typography>
 
-                              {/* Employee select */}
-                              <Select
+                              {/* Employee searchable select */}
+                              <Autocomplete
                                 size="small"
-                                value={entry?.employee_id || ''}
-                                onChange={(e) => handleAssign(day, period, slotIdx, e.target.value)}
+                                value={emp || null}
+                                onChange={(_, newVal) => handleAssign(day, period, slotIdx, newVal?.id || '')}
                                 onOpen={() => loadAvailable(day, period)}
-                                displayEmpty
+                                options={(() => {
+                                  const avail = availableEmps[`${day}-${period}`] || [];
+                                  const availIds = new Set(avail.map(e => e.id));
+                                  // Merge: available employees first (with hours info), then remaining employees
+                                  const rest = employees.filter(e => !availIds.has(e.id));
+                                  return [...avail, ...rest];
+                                })()}
+                                getOptionLabel={(opt) => opt?.name || ''}
+                                isOptionEqualToValue={(opt, val) => opt?.id === val?.id}
+                                renderOption={(props, option) => {
+                                  const avail = availableEmps[`${day}-${period}`] || [];
+                                  const availMatch = avail.find(e => e.id === option.id);
+                                  const isAvailable = !!availMatch;
+                                  const hoursLeft = availMatch?.hours_remaining;
+                                  return (
+                                    <li {...props} key={option.id}>
+                                      <Stack direction="row" alignItems="center" gap={0.5} sx={{ width: '100%', opacity: isAvailable ? 1 : 0.5 }}>
+                                        <Typography sx={{ fontSize: '0.8rem' }}>{option.name}</Typography>
+                                        {!!option.is_trainee && <Chip label="T" size="small" sx={{ height: 16, fontSize: '0.6rem' }} />}
+                                        {hoursLeft !== undefined && (
+                                          <Chip label={`${hoursLeft}h`} size="small" color={hoursLeft <= 7 ? 'warning' : 'default'} sx={{ height: 16, fontSize: '0.6rem', ml: 'auto' }} />
+                                        )}
+                                        {!isAvailable && avail.length > 0 && (
+                                          <Typography sx={{ fontSize: '0.65rem', color: 'text.disabled', ml: 'auto' }}>unavailable</Typography>
+                                        )}
+                                      </Stack>
+                                    </li>
+                                  );
+                                }}
+                                renderInput={(params) => (
+                                  <TextField
+                                    {...params}
+                                    placeholder="Empty"
+                                    sx={{ '& .MuiInputBase-input': { fontSize: '0.73rem', py: '2px !important' } }}
+                                  />
+                                )}
                                 sx={{
-                                  fontSize: '0.73rem',
                                   width: '85%',
                                   flexShrink: 1,
                                   minWidth: 0,
-                                  '& .MuiSelect-select': { py: 0.3, px: 0.75 },
+                                  '& .MuiAutocomplete-input': { p: '2px 4px !important' },
+                                  '& .MuiOutlinedInput-root': { py: '1px' },
                                 }}
-                              >
-                                <MenuItem value=""><em>Empty</em></MenuItem>
-                                {(() => {
-                                  const list = availableEmps[`${day}-${period}`] || employees;
-                                  // Ensure currently assigned employee always appears in dropdown
-                                  if (entry?.employee_id && !list.find(e => e.id === entry.employee_id)) {
-                                    const assigned = employees.find(e => e.id === entry.employee_id);
-                                    if (assigned) return [assigned, ...list];
-                                  }
-                                  return list;
-                                })().map((e) => (
-                                  <MenuItem key={e.id} value={e.id} sx={{ fontSize: '0.8rem' }}>
-                                    <Stack direction="row" alignItems="center" gap={0.5}>
-                                      {e.name}
-                                      {!!e.is_trainee && <Chip label="T" size="small" sx={{ height: 16, fontSize: '0.6rem' }} />}
-                                      {e.hours_remaining !== undefined && e.hours_remaining <= 7 && (
-                                        <Chip label={`${e.hours_remaining}h`} size="small" color="warning" sx={{ height: 16, fontSize: '0.6rem' }} />
-                                      )}
-                                    </Stack>
-                                  </MenuItem>
-                                ))}
-                              </Select>
+                                clearOnEscape
+                                openOnFocus
+                                blurOnSelect
+                              />
 
                               {/* Trainee indicator */}
                               {!!isTrainee && (
