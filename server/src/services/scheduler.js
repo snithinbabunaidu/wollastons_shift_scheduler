@@ -483,6 +483,11 @@ function computeSlotScore(emp, slot, day, dayAssignments, employees, lockedMap, 
   );
   if (!nonTraineeInShift && !emp.is_trainee) score += 300;
 
+  // Trainee preference for 7 AM morning slot on weekdays (Mon-Fri)
+  if (period === 'morning' && slot.config.start_time === '07:00' && day >= 1 && day <= 5) {
+    if (emp.is_trainee) score += 300;
+  }
+
   // Night shift: boost male employees when no male assigned yet
   if (period === 'night') {
     const hasMaleInNight = dayAssignments.some(
