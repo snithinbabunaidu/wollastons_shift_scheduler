@@ -664,15 +664,94 @@ async function autoGenerate(weekStart) {
     settingsMap[`${s.day_of_week}-${s.shift_period}`] = s.employee_count;
   }
 
-  // Clear existing non-locked schedule entries for this week
-  await db('schedules').where({ week_start_date: weekStart, is_locked: false }).del();
+  // Clear ALL existing schedule entries for this week (we'll recreate locked ones)
+  await db('schedules').where({ week_start_date: weekStart }).del();
 
-  // Keep existing locked entries
-  const existingLocked = await db('schedules').where({ week_start_date: weekStart, is_locked: true });
+  // Create locked schedule entries from locked_shifts table
+  // Each locked_shifts entry specifies employee + day + period; assign them to the best slot
+  const lockedByDayPeriod = {};
+  for (const ls of lockedShifts) {
+    const key = `${ls.day_of_week}-${ls.shift_period}`;
+    if (!lockedByDayPeriod[key]) lockedByDayPeriod[key] = [];
+    lockedByDayPeriod[key].push(ls);
+  }
+
+  const existingLocked = [];
+  for (const key of Object.keys(lockedByDayPeriod)) {
+    const [dayStr, period] = key.split('-');
+    const day = parseInt(dayStr);
+    const periodConfigs = shiftConfigs.filter(c => c.shift_period === period);
+    const slotsNeeded = settingsMap[key] || slotCounts[period];
+    const entries = lockedByDayPeriod[key];
+
+    // Sort locked entries: managers first (they need specific start times)
+    entries.sort((a, b) => {
+      const empA = employees.find(e => e.id === a.employee_id);
+      const empB = employees.find(e => e.id === b.employee_id);
+      const aManager = empA && empA.roles.some(r => r.endsWith('_manager'));
+      const bManager = empB && empB.roles.some(r => r.endsWith('_manager'));
+      return (bManager ? 1 : 0) - (aManager ? 1 : 0);
+    });
+
+    const usedSlots = new Set();
+    for (const ls of entries) {
+      const emp = employees.find(e => e.id === ls.employee_id);
+      if (!emp) continue;
+
+      // Find best slot for this employee in this period
+      let bestSlot = null;
+      const isManager = emp.roles.includes(`${period}_manager`);
+
+      for (let slotIdx = 0; slotIdx < slotsNeeded; slotIdx++) {
+        if (usedSlots.has(slotIdx)) continue;
+        const config = periodConfigs[slotIdx] || periodConfigs[periodConfigs.length - 1];
+        if (isManager && MANAGER_START_TIMES[period] && MANAGER_START_TIMES[period].includes(config.start_time)) {
+          bestSlot = { slotIdx, config };
+          break;
+        }
+      }
+      // If no manager slot found or not a manager, take any open slot
+      if (!bestSlot) {
+        for (let slotIdx = 0; slotIdx < slotsNeeded; slotIdx++) {
+          if (usedSlots.has(slotIdx)) continue;
+          const config = periodConfigs[slotIdx] || periodConfigs[periodConfigs.length - 1];
+          bestSlot = { slotIdx, config };
+          break;
+        }
+      }
+
+      if (bestSlot) {
+        usedSlots.add(bestSlot.slotIdx);
+        const entry = {
+          week_start_date: weekStart,
+          day_of_week: day,
+          shift_period: period,
+          slot_index: bestSlot.slotIdx,
+          employee_id: ls.employee_id,
+          is_locked: true,
+          start_time: bestSlot.config.start_time,
+          end_time: bestSlot.config.end_time,
+        };
+        existingLocked.push(entry);
+      }
+    }
+  }
+
+  // Insert all locked entries into DB
+  if (existingLocked.length > 0) {
+    await db('schedules').insert(existingLocked);
+  }
+
+  // Build set of employees who have locked shifts — they ONLY work those shifts
+  const lockedEmployeeIds = new Set(lockedShifts.map(ls => ls.employee_id));
+
+  // Filter out locked employees from the general allocation pool
+  const freeEmployees = employees.filter(emp => !lockedEmployeeIds.has(emp.id));
 
   // ═══ PHASE 0: Pre-computation ═══
   const daySlots = buildDaySlots(shiftConfigs, settingsMap, slotCounts, existingLocked);
-  const eligibility = buildEligibilityMatrix(employees, daySlots, unavailMap, oldAvailMap);
+  // Build eligibility only for free employees (locked employees are already assigned)
+  const eligibility = buildEligibilityMatrix(freeEmployees, daySlots, unavailMap, oldAvailMap);
 
   // Initialize tracking
   const hoursUsed = {};
@@ -684,11 +763,10 @@ async function autoGenerate(weekStart) {
     daysAssigned[e.id] = new Set();
   });
 
-  // Account for locked schedule entries
+  // Account for locked schedule entries (hours for locked employees)
   for (const entry of existingLocked) {
     if (entry.employee_id) {
-      const config = shiftConfigs.find(c => c.shift_period === entry.shift_period && c.slot_index === entry.slot_index);
-      const hours = calcHours(entry.start_time || config?.start_time, entry.end_time || config?.end_time);
+      const hours = calcHours(entry.start_time, entry.end_time);
       hoursUsed[entry.employee_id] = (hoursUsed[entry.employee_id] || 0) + hours;
       shiftsAssigned[entry.employee_id] = (shiftsAssigned[entry.employee_id] || 0) + 1;
       daysAssigned[entry.employee_id] = daysAssigned[entry.employee_id] || new Set();
@@ -705,7 +783,7 @@ async function autoGenerate(weekStart) {
   // ═══ PHASE 1A: Mandatory pre-assignments ═══
   const dayAllocation = Array.from({ length: 7 }, () => []);
 
-  // Locked employees
+  // Locked employees are already in the schedule — add them to dayAllocation
   for (const entry of existingLocked) {
     if (entry.employee_id && !dayAllocation[entry.day_of_week].includes(entry.employee_id)) {
       dayAllocation[entry.day_of_week].push(entry.employee_id);
@@ -713,35 +791,36 @@ async function autoGenerate(weekStart) {
   }
 
   // ═══ PHASE 1B: Day-level allocation with backtracking ═══
-  // Clone hoursUsed for Phase 1 (tentative tracking with minHours)
+  // Only allocate FREE employees (locked employees are already assigned)
   const phase1Hours = { ...hoursUsed };
   const phase1Shifts = { ...shiftsAssigned };
   const phase1Days = {};
-  for (const emp of employees) {
+  for (const emp of freeEmployees) {
     phase1Days[emp.id] = new Set(daysAssigned[emp.id]);
   }
 
-  allocateEmployeesToDays(dayAllocation, slotsPerDay, employees, daySlots, eligibility,
+  allocateEmployeesToDays(dayAllocation, slotsPerDay, freeEmployees, daySlots, eligibility,
     phase1Hours, phase1Shifts, phase1Days);
 
   // ═══ PHASE 1C: Hour budget optimization ═══
-  const targetHours = optimizeHourBudgets(dayAllocation, employees, daySlots, eligibility);
+  const targetHours = optimizeHourBudgets(dayAllocation, freeEmployees, daySlots, eligibility);
 
   // ═══ PHASE 2: Slot assignment ═══
   // Reset hoursUsed to only locked hours (Phase 1 used tentative values)
   employees.forEach(e => { hoursUsed[e.id] = 0; });
   for (const entry of existingLocked) {
     if (entry.employee_id) {
-      const config = shiftConfigs.find(c => c.shift_period === entry.shift_period && c.slot_index === entry.slot_index);
-      const hours = calcHours(entry.start_time || config?.start_time, entry.end_time || config?.end_time);
+      const hours = calcHours(entry.start_time, entry.end_time);
       hoursUsed[entry.employee_id] = (hoursUsed[entry.employee_id] || 0) + hours;
     }
   }
 
   const allAssignments = [];
   for (let day = 0; day < 7; day++) {
+    // Only pass free employees for slot assignment (locked are already in DB)
+    const freeAllocated = dayAllocation[day].filter(id => !lockedEmployeeIds.has(id));
     const dayAssignments = assignSlotsForDay(
-      day, dayAllocation[day], daySlots[day], employees, hoursUsed,
+      day, freeAllocated, daySlots[day], freeEmployees, hoursUsed,
       lockedMap, orderDaysMap, targetHours, existingLocked, weekStart, unavailMap, oldAvailMap
     );
     // Filter out locked entries (they're already in DB)
@@ -786,7 +865,7 @@ async function autoGenerate(weekStart) {
     let bestEmp = null;
     let bestScore = -Infinity;
 
-    for (const emp of employees) {
+    for (const emp of freeEmployees) {
       if (dayEmployees[a.day_of_week].has(emp.id)) continue;
       if (!isEmployeeAvailable(emp, unavailMap, oldAvailMap, a.day_of_week, a.start_time, a.end_time, a.shift_period)) continue;
       if (!canEmployeeWorkSlot(emp, slot, true)) continue; // fully relaxed
@@ -802,7 +881,7 @@ async function autoGenerate(weekStart) {
       }
 
       const score = computeSlotScore(emp, slot, a.day_of_week, allAssignments.filter(x => x.day_of_week === a.day_of_week),
-        employees, lockedMap, orderDaysMap, targetHours, hoursUsed);
+        freeEmployees, lockedMap, orderDaysMap, targetHours, hoursUsed);
       if (score > bestScore) {
         bestScore = score;
         bestEmp = emp;
