@@ -37,6 +37,17 @@ const MANAGER_START_TIMES = {
   night: ['18:00'],
 };
 
+// Minimum morning start time (10:00) if employee worked night shift previous day
+const MIN_MORNING_AFTER_NIGHT = '10:00';
+
+// Check if employee worked night shift on previous day (from assignments list)
+function workedNightPreviousDay(empId, day, allAssignments, existingLocked) {
+  const prevDay = day - 1; // Sunday=0, so prevDay=-1 means Saturday of previous week (skip)
+  if (prevDay < 0) return false;
+  const allEntries = [...(allAssignments || []), ...(existingLocked || [])];
+  return allEntries.some(a => a.employee_id === empId && a.day_of_week === prevDay && a.shift_period === 'night');
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Phase 0 helpers: Pre-computation
 // ═══════════════════════════════════════════════════════════════
@@ -82,6 +93,9 @@ function buildDaySlots(shiftConfigs, settingsMap, slotCounts, existingLocked) {
 // In strict mode: non-managers blocked from slot 0, managers restricted to their period
 // In relaxed mode: anyone can fill any slot
 function canEmployeeWorkSlot(emp, slot, relaxManager) {
+  // Trainees cannot work 6 AM morning shifts
+  if (emp.is_trainee && slot.period === 'morning' && slot.config.start_time === '06:00') return false;
+
   const hasAnyManagerRole = emp.roles.some(r => r.endsWith('_manager'));
 
   if (relaxManager) {
@@ -497,7 +511,7 @@ function computeSlotScore(emp, slot, day, dayAssignments, employees, lockedMap, 
 }
 
 function assignSlotsForDay(day, allocatedEmpIds, daySlotsList, employees, hoursUsed,
-  lockedMap, orderDaysMap, targetHours, _existingLocked, weekStart, unavailMap, oldAvailMap) {
+  lockedMap, orderDaysMap, targetHours, existingLocked, weekStart, unavailMap, oldAvailMap, priorAssignments) {
   const assignments = [];
   const empMap = {};
   for (const emp of employees) empMap[emp.id] = emp;
@@ -530,6 +544,9 @@ function assignSlotsForDay(day, allocatedEmpIds, daySlotsList, employees, hoursU
       if (!isEmployeeAvailable(emp, unavailMap, oldAvailMap, day, slot.config.start_time, slot.config.end_time, slot.period)) continue;
       if (!canEmployeeWorkSlot(emp, slot, false)) continue;
       if (hoursUsed[emp.id] + slot.shiftHours > emp.max_hours) continue;
+      // Night-to-morning rest: if worked night previous day, morning must be 10:00+
+      if (slot.period === 'morning' && slot.config.start_time < MIN_MORNING_AFTER_NIGHT &&
+          workedNightPreviousDay(emp.id, day, priorAssignments, existingLocked)) continue;
 
       const score = computeSlotScore(emp, slot, day, assignments, employees, lockedMap, orderDaysMap, targetHours, hoursUsed);
       pairs.push({ emp, slot, score });
@@ -583,6 +600,9 @@ function assignSlotsForDay(day, allocatedEmpIds, daySlotsList, employees, hoursU
       if (emp.employment_type === 'external_coop') {
         if (day !== 0 && day !== 6) continue;
       }
+      // Night-to-morning rest
+      if (slot.period === 'morning' && slot.config.start_time < MIN_MORNING_AFTER_NIGHT &&
+          workedNightPreviousDay(emp.id, day, priorAssignments, existingLocked)) continue;
 
       const score = computeSlotScore(emp, slot, day, assignments, employees, lockedMap, orderDaysMap, targetHours, hoursUsed);
       if (score > bestScore) {
@@ -849,7 +869,7 @@ async function autoGenerate(weekStart) {
     const allocatedForDay = dayAllocation[day].filter(id => !lockedEmployeeIds.has(id) || !existingLocked.some(e => e.employee_id === id && e.day_of_week === day));
     const dayAssignments = assignSlotsForDay(
       day, allocatedForDay, daySlots[day], employees, hoursUsed,
-      lockedMap, orderDaysMap, targetHours, existingLocked, weekStart, unavailMap, oldAvailMap
+      lockedMap, orderDaysMap, targetHours, existingLocked, weekStart, unavailMap, oldAvailMap, allAssignments
     );
     // Filter out locked entries (they're already in DB)
     const nonLocked = dayAssignments.filter(a => !a.is_locked);
@@ -898,6 +918,9 @@ async function autoGenerate(weekStart) {
       if (!isEmployeeAvailable(emp, unavailMap, oldAvailMap, a.day_of_week, a.start_time, a.end_time, a.shift_period)) continue;
       if (!canEmployeeWorkSlot(emp, slot, true)) continue; // fully relaxed
       if (hoursUsed[emp.id] + shiftHours > emp.max_hours) continue;
+      // Night-to-morning rest
+      if (a.shift_period === 'morning' && a.start_time < MIN_MORNING_AFTER_NIGHT &&
+          workedNightPreviousDay(emp.id, a.day_of_week, allAssignments, existingLocked)) continue;
       if (emp.employment_type === 'external_coop') {
         if (a.day_of_week !== 0 && a.day_of_week !== 6) continue;
         // Count current weekend shifts
