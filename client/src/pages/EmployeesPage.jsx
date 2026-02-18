@@ -55,7 +55,7 @@ export default function EmployeesPage() {
   const openAdd = () => {
     setEditDialog({
       mode: 'add',
-      data: { name: '', employment_type: 'part_time', is_trainee: false, roles: [], max_hours: 20 },
+      data: { name: '', employment_type: 'part_time', is_trainee: false, roles: [], max_hours: 20, gender: '' },
     });
   };
 
@@ -215,6 +215,7 @@ export default function EmployeesPage() {
               <TableCell>Type</TableCell>
               <TableCell>Role</TableCell>
               <TableCell>Max Hours</TableCell>
+              <TableCell>Gender</TableCell>
               <TableCell>Trainee</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
@@ -241,6 +242,7 @@ export default function EmployeesPage() {
                   }
                 </TableCell>
                 <TableCell>{emp.max_hours}h</TableCell>
+                <TableCell>{emp.gender === 'male' ? 'M' : emp.gender === 'female' ? 'F' : '—'}</TableCell>
                 <TableCell>{emp.is_trainee ? 'Yes' : 'No'}</TableCell>
                 <TableCell align="right">
                   <IconButton size="small" onClick={() => openEdit(emp)} title="Edit"><Edit fontSize="small" /></IconButton>
@@ -254,7 +256,7 @@ export default function EmployeesPage() {
             ))}
             {employees.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} align="center" sx={{ py: 4, color: 'text.secondary' }}>
+                <TableCell colSpan={7} align="center" sx={{ py: 4, color: 'text.secondary' }}>
                   No employees yet. Click "Add Employee" to get started.
                 </TableCell>
               </TableRow>
@@ -282,6 +284,17 @@ export default function EmployeesPage() {
               onChange={(e) => updateFormField('employment_type', e.target.value)}
             >
               {EMP_TYPES.map(t => <MenuItem key={t.value} value={t.value}>{t.label}</MenuItem>)}
+            </Select>
+          </FormControl>
+          <FormControl fullWidth margin="normal">
+            <InputLabel>Gender</InputLabel>
+            <Select
+              value={editDialog?.data.gender || ''}
+              label="Gender"
+              onChange={(e) => updateFormField('gender', e.target.value)}
+            >
+              <MenuItem value="male">Male</MenuItem>
+              <MenuItem value="female">Female</MenuItem>
             </Select>
           </FormControl>
           <Box sx={{ mt: 2, mb: 1 }}>

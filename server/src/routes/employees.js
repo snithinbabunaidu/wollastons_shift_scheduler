@@ -67,7 +67,7 @@ router.get('/:id', async (req, res) => {
 // Create employee
 router.post('/', async (req, res) => {
   try {
-    const { name, employment_type, is_trainee, roles, max_hours } = req.body;
+    const { name, employment_type, is_trainee, roles, max_hours, gender } = req.body;
     if (!name) return res.status(400).json({ error: 'Name is required' });
 
     const maxHrs = employment_type === 'coop' ? 40 :
@@ -79,6 +79,7 @@ router.post('/', async (req, res) => {
       is_trainee: is_trainee || false,
       role: serializeRoles(roles),
       max_hours: max_hours || maxHrs,
+      gender: gender || null,
     }).returning('id');
     const id = typeof inserted === 'object' ? inserted.id : inserted;
 
@@ -104,13 +105,14 @@ router.post('/', async (req, res) => {
 // Update employee
 router.put('/:id', async (req, res) => {
   try {
-    const { name, employment_type, is_trainee, roles, max_hours } = req.body;
+    const { name, employment_type, is_trainee, roles, max_hours, gender } = req.body;
     await db('employees').where({ id: req.params.id }).update({
       name,
       employment_type,
       is_trainee,
       role: serializeRoles(roles),
       max_hours,
+      gender: gender || null,
     });
     const employee = await db('employees').where({ id: req.params.id }).first();
     res.json(normalizeEmployee(employee));

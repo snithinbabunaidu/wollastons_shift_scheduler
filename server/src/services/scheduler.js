@@ -469,6 +469,15 @@ function computeSlotScore(emp, slot, day, dayAssignments, employees, lockedMap, 
   );
   if (!nonTraineeInShift && !emp.is_trainee) score += 300;
 
+  // Night shift: boost male employees when no male assigned yet
+  if (period === 'night') {
+    const hasMaleInNight = dayAssignments.some(
+      a => a.shift_period === 'night' && a.employee_id &&
+        employees.find(e => e.id === a.employee_id && e.gender === 'male')
+    );
+    if (!hasMaleInNight && emp.gender === 'male') score += 400;
+  }
+
   // Target hours match bonus (from Phase 1C) — strong bonus to honor the knapsack plan
   if (targetHours[emp.id] && targetHours[emp.id][day] === shiftHours) score += 400;
   // Penalty for deviating from target hours (prevents wasting 5h slots on non-target employees)
@@ -982,6 +991,18 @@ function generateWarnings(assignments, lockedEntries, employees) {
       if (!hasManager) {
         const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
         warnings.push(`${dayNames[day]} ${period} shift has no manager assigned`);
+      }
+
+      // Night shift: warn if no male employee
+      if (period === 'night') {
+        const hasMale = shiftEntries.some(a => {
+          const emp = employees.find(e => e.id === a.employee_id);
+          return emp && emp.gender === 'male';
+        });
+        if (!hasMale) {
+          const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+          warnings.push(`${dayNames[day]} night shift has no male employee`);
+        }
       }
 
       const emptySlots = shiftEntries.filter(a => !a.employee_id);
