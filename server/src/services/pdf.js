@@ -87,13 +87,13 @@ async function generatePDF(weekStart) {
   // Page 1: Sunday-Wednesday (days as rows, shifts as columns)
   content.push({ text: `Schedule: Week of ${weekStart}`, style: 'title' });
   content.push({ text: '', margin: [0, 5] });
-  content.push(buildDaysAsRowsTable(scheduleData, shiftConfigs, [0, 1, 2, 3], orderDaysMap));
+  content.push(buildDaysAsRowsTable(scheduleData, shiftConfigs, [0, 1, 2, 3], orderDaysMap, weekStart));
 
   // Page 2: Thursday-Saturday
   content.push({ text: '', pageBreak: 'before' });
   content.push({ text: `Schedule: Week of ${weekStart} (continued)`, style: 'title' });
   content.push({ text: '', margin: [0, 5] });
-  content.push(buildDaysAsRowsTable(scheduleData, shiftConfigs, [4, 5, 6], orderDaysMap));
+  content.push(buildDaysAsRowsTable(scheduleData, shiftConfigs, [4, 5, 6], orderDaysMap, weekStart));
 
   // Page 3: Summary
   content.push({ text: '', pageBreak: 'before' });
@@ -133,7 +133,7 @@ async function generatePDF(weekStart) {
 }
 
 // New layout: days as rows, shifts (Morning | Afternoon | Night) as columns
-function buildDaysAsRowsTable(scheduleData, shiftConfigs, days, orderDaysMap) {
+function buildDaysAsRowsTable(scheduleData, shiftConfigs, days, orderDaysMap, weekStart) {
   const body = [];
 
   // Header row: Day | Morning | Afternoon | Night
@@ -150,8 +150,13 @@ function buildDaysAsRowsTable(scheduleData, shiftConfigs, days, orderDaysMap) {
     if (orderDaysMap.ag.includes(day)) orderLabels.push('AG Order');
     if (orderDaysMap.us.includes(day)) orderLabels.push('US Order');
 
+    // Compute date for this day
+    const dayDate = new Date(weekStart + 'T00:00:00');
+    dayDate.setDate(dayDate.getDate() + day);
+    const dateStr = `${String(dayDate.getMonth() + 1).padStart(2, '0')}/${String(dayDate.getDate()).padStart(2, '0')}`;
+
     const dayText = [];
-    dayText.push({ text: DAY_NAMES[day], bold: true, fontSize: 11 });
+    dayText.push({ text: `${DAY_NAMES[day]} ${dateStr}`, bold: true, fontSize: 11 });
     if (orderLabels.length > 0) {
       dayText.push({ text: `\n${orderLabels.join(', ')}`, fontSize: 7, italics: true });
     }

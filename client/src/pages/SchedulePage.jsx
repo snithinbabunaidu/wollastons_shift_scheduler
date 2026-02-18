@@ -428,6 +428,9 @@ export default function SchedulePage() {
       {Array.from({ length: 7 }, (_, day) => {
         const isAgOrderDay = orderDays.ag?.includes(day);
         const isUsOrderDay = orderDays.us?.includes(day);
+        const dayDate = new Date(weekStart + 'T00:00:00');
+        dayDate.setDate(dayDate.getDate() + day);
+        const dateStr = `${String(dayDate.getMonth() + 1).padStart(2, '0')}/${String(dayDate.getDate()).padStart(2, '0')}`;
 
         return (
           <Card key={day} sx={{ mb: 2 }} variant="outlined">
@@ -435,7 +438,7 @@ export default function SchedulePage() {
               {/* Day header */}
               <Stack direction="row" alignItems="center" gap={1} mb={1}>
                 <Typography variant="h6" sx={{ fontWeight: 'bold', minWidth: 100 }}>
-                  {DAY_NAMES[day]}
+                  {DAY_NAMES[day]} <Typography component="span" variant="body2" color="text.secondary">{dateStr}</Typography>
                 </Typography>
                 {isAgOrderDay && (
                   <Chip label="AG Order Day" size="small" color="success" variant="outlined" sx={{ fontSize: '0.7rem', height: 22 }} />
