@@ -476,6 +476,12 @@ function computeSlotScore(emp, slot, day, dayAssignments, employees, lockedMap, 
     score += 400;
   }
 
+  // Morning managers should get the 6 AM slots (slot 0 and 1)
+  if (period === 'morning' && slot.config.start_time === '06:00') {
+    if (isManagerForPeriod) score += 500;
+    else score -= 200; // discourage non-managers from taking 6 AM morning slots
+  }
+
   // Non-trainee bonus when none yet in this period for the day
   const nonTraineeInShift = dayAssignments.some(
     a => a.shift_period === period && a.employee_id &&
