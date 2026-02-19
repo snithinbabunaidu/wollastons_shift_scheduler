@@ -112,6 +112,8 @@ function canEmployeeWorkSlot(emp, slot, relaxManager) {
   if (!hasAnyManagerRole) {
     // Non-managers can work any slot EXCEPT slot 0 (manager slot)
     if (slot.isManagerSlot) return false;
+    // Non-managers blocked from 6 AM morning slots (morning managers only)
+    if (slot.period === 'morning' && slot.config.start_time === '06:00') return false;
     return true;
   }
 
@@ -474,12 +476,6 @@ function computeSlotScore(emp, slot, day, dayAssignments, employees, lockedMap, 
   // Food order employees boost for any morning slot
   if (period === 'morning' && (emp.roles.includes('ag_food_order') || emp.roles.includes('us_food_order'))) {
     score += 400;
-  }
-
-  // Morning managers should get the 6 AM slots (slot 0 and 1)
-  if (period === 'morning' && slot.config.start_time === '06:00') {
-    if (isManagerForPeriod) score += 500;
-    else score -= 200; // discourage non-managers from taking 6 AM morning slots
   }
 
   // Non-trainee bonus when none yet in this period for the day
