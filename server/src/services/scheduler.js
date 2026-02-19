@@ -467,14 +467,15 @@ function computeSlotScore(emp, slot, day, dayAssignments, employees, lockedMap, 
   // Manager for manager-designated slot
   if (isManagerSlot && isManagerForPeriod) score += 500;
 
-  // Food order on order day, first morning slot
-  if (period === 'morning' && slotIdx === 0) {
-    if (orderDaysMap.ag.includes(day) && emp.roles.includes('ag_food_order')) score += 600;
-    if (orderDaysMap.us.includes(day) && emp.roles.includes('us_food_order')) score += 600;
+  // Food order employee on order day: MUST get a 6 AM slot (highest priority after locked)
+  const isFoodOrderEmp = emp.roles.includes('ag_food_order') || emp.roles.includes('us_food_order');
+  const isOrderDay = orderDaysMap.ag.includes(day) || orderDaysMap.us.includes(day);
+  if (period === 'morning' && slot.config.start_time === '06:00' && isFoodOrderEmp && isOrderDay) {
+    score += 900;
   }
 
   // Food order employees boost for any morning slot
-  if (period === 'morning' && (emp.roles.includes('ag_food_order') || emp.roles.includes('us_food_order'))) {
+  if (period === 'morning' && isFoodOrderEmp) {
     score += 400;
   }
 
