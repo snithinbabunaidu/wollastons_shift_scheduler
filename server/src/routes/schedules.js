@@ -132,7 +132,8 @@ router.put('/:weekStart/settings', async (req, res) => {
 router.post('/:weekStart/auto-generate', async (req, res) => {
   try {
     const { weekStart } = req.params;
-    const result = await autoGenerate(weekStart);
+    const overflowHours = Math.min(Math.max(Number(req.body.overflow_hours) || 0, 0), 4);
+    const result = await autoGenerate(weekStart, { overflowHours });
     res.json(result);
   } catch (err) {
     console.error(err);

@@ -656,7 +656,7 @@ function assignSlotsForDay(day, allocatedEmpIds, daySlotsList, employees, hoursU
 // Main scheduling function (two-phase algorithm)
 // ═══════════════════════════════════════════════════════════════
 
-async function autoGenerate(weekStart) {
+async function autoGenerate(weekStart, { overflowHours = 0 } = {}) {
   // ═══ Data Loading (same as original) ═══
   const rawEmployees = await db('employees').where({ active: true });
   const employees = rawEmployees.map(emp => {
@@ -926,7 +926,7 @@ async function autoGenerate(weekStart) {
       if (dayEmployees[a.day_of_week].has(emp.id)) continue;
       if (!isEmployeeAvailable(emp, unavailMap, oldAvailMap, a.day_of_week, a.start_time, a.end_time, a.shift_period)) continue;
       if (!canEmployeeWorkSlot(emp, slot, true)) continue; // fully relaxed
-      if (hoursUsed[emp.id] + shiftHours > emp.max_hours) continue;
+      if (hoursUsed[emp.id] + shiftHours > emp.max_hours + overflowHours) continue;
       // Night-to-morning rest
       if (a.shift_period === 'morning' && a.start_time < MIN_MORNING_AFTER_NIGHT &&
           workedNightPreviousDay(emp.id, a.day_of_week, allAssignments, existingLocked)) continue;
@@ -964,7 +964,7 @@ async function autoGenerate(weekStart) {
   }
 
   // Generate warnings
-  const warnings = generateWarnings(allAssignments, existingLocked, employees);
+  const warnings = generateWarnings(allAssignments, existingLocked, employees, hoursUsed);
 
   return { success: true, assignments_count: allAssignments.length, warnings };
 }
@@ -993,9 +993,20 @@ function isEmployeeAvailable(emp, unavailMap, oldAvailMap, day, shiftStartTime, 
   return true;
 }
 
-function generateWarnings(assignments, lockedEntries, employees) {
+function generateWarnings(assignments, lockedEntries, employees, hoursUsed) {
   const warnings = [];
   const allEntries = [...assignments, ...lockedEntries];
+
+  // Overflow warnings
+  if (hoursUsed) {
+    for (const emp of employees) {
+      const used = hoursUsed[emp.id] || 0;
+      if (used > emp.max_hours) {
+        const over = (used - emp.max_hours).toFixed(1).replace(/\.0$/, '');
+        warnings.push(`${emp.name} assigned ${used.toFixed(1).replace(/\.0$/, '')}h (max ${emp.max_hours}h, +${over}h overflow)`);
+      }
+    }
+  }
 
   for (let day = 0; day < 7; day++) {
     for (const period of ['morning', 'afternoon', 'night']) {

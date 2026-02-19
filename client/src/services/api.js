@@ -62,8 +62,8 @@ export const saveSchedule = (weekStart, assignments) =>
   api.put(`/schedules/${weekStart}`, { assignments });
 export const updateScheduleSettings = (weekStart, settings) =>
   api.put(`/schedules/${weekStart}/settings`, { settings });
-export const autoGenerateSchedule = (weekStart) =>
-  api.post(`/schedules/${weekStart}/auto-generate`);
+export const autoGenerateSchedule = (weekStart, { overflowHours = 0 } = {}) =>
+  api.post(`/schedules/${weekStart}/auto-generate`, { overflow_hours: overflowHours });
 export const getAvailableEmployees = (weekStart, dayOfWeek, shiftPeriod) =>
   api.get(`/schedules/${weekStart}/available/${dayOfWeek}/${shiftPeriod}`);
 export const downloadPDF = (weekStart) =>

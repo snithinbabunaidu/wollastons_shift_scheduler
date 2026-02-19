@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Box, Typography, Button, Select, MenuItem, IconButton, Chip, Alert, Stack,
   Dialog, DialogTitle, DialogContent, DialogActions, Tooltip, CircularProgress,
   TextField, Popover, Card, CardContent, Divider, Paper, FormControl, InputLabel,
-  Autocomplete,
+  Autocomplete, Slider,
 } from '@mui/material';
 import {
   ChevronLeft, ChevronRight, AutoFixHigh, PictureAsPdf, Save,
@@ -58,6 +58,8 @@ export default function SchedulePage() {
   const [dirty, setDirty] = useState(false);
   const [availableEmps, setAvailableEmps] = useState({});
   const [confirmDialog, setConfirmDialog] = useState(null);
+  const [overflowHours, setOverflowHours] = useState(0);
+  const overflowHoursRef = useRef(0);
   const [timeEditAnchor, setTimeEditAnchor] = useState(null);
   const [timeEditKey, setTimeEditKey] = useState(null);
   const [timeEditStart, setTimeEditStart] = useState('');
@@ -216,14 +218,16 @@ export default function SchedulePage() {
   };
 
   const handleAutoGenerate = () => {
+    setOverflowHours(0);
+    overflowHoursRef.current = 0;
     setConfirmDialog({
       title: 'Auto-Generate Schedule',
-      message: 'This will fill empty slots based on availability and rules. Locked shifts are preserved. Continue?',
+      message: 'auto-generate',
       onConfirm: async () => {
         setConfirmDialog(null);
         setGenerating(true);
         try {
-          const res = await api.autoGenerateSchedule(weekStart);
+          const res = await api.autoGenerateSchedule(weekStart, { overflowHours: overflowHoursRef.current });
           if (res.data.warnings?.length > 0) setWarnings(res.data.warnings);
           await loadSchedule();
         } catch (err) {
@@ -682,7 +686,30 @@ export default function SchedulePage() {
       {/* Confirm Dialog */}
       <Dialog open={!!confirmDialog} onClose={() => setConfirmDialog(null)}>
         <DialogTitle>{confirmDialog?.title}</DialogTitle>
-        <DialogContent><Typography>{confirmDialog?.message}</Typography></DialogContent>
+        <DialogContent>
+          {confirmDialog?.message === 'auto-generate' ? (
+            <Box>
+              <Typography sx={{ mb: 2 }}>
+                This will fill empty slots based on availability and rules. Locked shifts are preserved.
+              </Typography>
+              <Typography variant="subtitle2" gutterBottom>
+                Overflow Tolerance: {overflowHours}h
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                Allow employees to exceed their max hours by up to this amount to fill remaining slots.
+              </Typography>
+              <Slider
+                value={overflowHours}
+                onChange={(_, val) => { setOverflowHours(val); overflowHoursRef.current = val; }}
+                min={0} max={4} step={1}
+                marks={[{ value: 0, label: '0h' }, { value: 1, label: '1h' }, { value: 2, label: '2h' }, { value: 3, label: '3h' }, { value: 4, label: '4h' }]}
+                sx={{ mt: 1 }}
+              />
+            </Box>
+          ) : (
+            <Typography>{confirmDialog?.message}</Typography>
+          )}
+        </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmDialog(null)}>Cancel</Button>
           <Button variant="contained" onClick={confirmDialog?.onConfirm}>Continue</Button>
