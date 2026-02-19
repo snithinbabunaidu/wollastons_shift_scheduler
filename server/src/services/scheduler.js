@@ -520,7 +520,7 @@ function computeSlotScore(emp, slot, day, dayAssignments, employees, lockedMap, 
 }
 
 function assignSlotsForDay(day, allocatedEmpIds, daySlotsList, employees, hoursUsed,
-  lockedMap, orderDaysMap, targetHours, existingLocked, weekStart, unavailMap, oldAvailMap, priorAssignments) {
+  lockedMap, orderDaysMap, targetHours, existingLocked, weekStart, unavailMap, oldAvailMap, priorAssignments, overflowHours = 0) {
   const assignments = [];
   const empMap = {};
   for (const emp of employees) empMap[emp.id] = emp;
@@ -605,7 +605,7 @@ function assignSlotsForDay(day, allocatedEmpIds, daySlotsList, employees, hoursU
       if (alreadyToday) continue;
       if (!isEmployeeAvailable(emp, unavailMap, oldAvailMap, day, slot.config.start_time, slot.config.end_time, slot.period)) continue;
       if (!canEmployeeWorkSlot(emp, slot, true)) continue; // relaxed
-      if (hoursUsed[emp.id] + slot.shiftHours > emp.max_hours) continue;
+      if (hoursUsed[emp.id] + slot.shiftHours > emp.max_hours + overflowHours) continue;
       if (emp.employment_type === 'external_coop') {
         if (day !== 0 && day !== 6) continue;
       }
@@ -878,7 +878,7 @@ async function autoGenerate(weekStart, { overflowHours = 0 } = {}) {
     const allocatedForDay = dayAllocation[day].filter(id => !lockedEmployeeIds.has(id) || !existingLocked.some(e => e.employee_id === id && e.day_of_week === day));
     const dayAssignments = assignSlotsForDay(
       day, allocatedForDay, daySlots[day], employees, hoursUsed,
-      lockedMap, orderDaysMap, targetHours, existingLocked, weekStart, unavailMap, oldAvailMap, allAssignments
+      lockedMap, orderDaysMap, targetHours, existingLocked, weekStart, unavailMap, oldAvailMap, allAssignments, overflowHours
     );
     // Filter out locked entries (they're already in DB)
     const nonLocked = dayAssignments.filter(a => !a.is_locked);
