@@ -8,6 +8,7 @@ const employeeRoutes = require('./routes/employees');
 const shiftConfigRoutes = require('./routes/shiftConfig');
 const scheduleRoutes = require('./routes/schedules');
 const orderDayRoutes = require('./routes/orderDays');
+const registrationRoutes = require('./routes/registration');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -28,6 +29,7 @@ app.use('/api/employees', employeeRoutes);
 app.use('/api/shift-config', shiftConfigRoutes);
 app.use('/api/schedules', scheduleRoutes);
 app.use('/api/order-days', orderDayRoutes);
+app.use('/api/registration', registrationRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
