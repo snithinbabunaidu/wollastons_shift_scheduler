@@ -196,6 +196,10 @@ function countEligibleForDay(day, employees, eligibility, daysAssigned, hoursUse
 
 function getRankedCandidatesForDay(day, employees, eligibility, daysAssigned, hoursUsed, shiftsAssigned, daySlots, orderDaysMap) {
   const candidates = [];
+
+  // Calculate global stats for fairness
+  const globalMaxShifts = Math.max(...employees.map(e => shiftsAssigned[e.id] || 0), 1);
+
   for (const emp of employees) {
     if (daysAssigned[emp.id].has(day)) continue;
     if (!eligibility[emp.id][day].eligible) continue;
@@ -208,6 +212,23 @@ function getRankedCandidatesForDay(day, employees, eligibility, daysAssigned, ho
 
     // Score for day-level allocation
     let score = 0;
+
+    // ═══ FAIRNESS: Utilization-based priority (DOMINANT FACTOR) ═══
+    // Employees who have used less of their capacity get MUCH higher priority
+    // This ensures equal distribution proportional to max_hours
+    const utilization = hoursUsed[emp.id] / emp.max_hours; // 0.0 = unused, 1.0 = fully used
+    score += (1 - utilization) * 1000; // 0-1000 points based on remaining capacity ratio
+
+    // ═══ FAIRNESS: Strong bonus for employees with ZERO shifts ═══
+    // Ensures everyone gets at least 1 shift before anyone gets many
+    if (shiftsAssigned[emp.id] === 0) score += 800;
+    else if (shiftsAssigned[emp.id] === 1) score += 400;
+    else if (shiftsAssigned[emp.id] === 2) score += 100;
+
+    // ═══ FAIRNESS: Penalize employees who already have proportionally more shifts ═══
+    // Compare shifts assigned vs what's proportional to their max_hours
+    const proportionalTarget = emp.max_hours / 7; // rough target shifts (hours per shift ~7h)
+    if (shiftsAssigned[emp.id] > proportionalTarget) score -= 300;
 
     // Scarcity: employees with fewer remaining eligible days get priority
     let eligibleDayCount = 0;
@@ -234,21 +255,17 @@ function getRankedCandidatesForDay(day, employees, eligibility, daysAssigned, ho
       if (isFoodOrderEmp && isOrderDay) score += 800;
     }
 
-    // Remaining capacity as a fraction of max (treats 13/20 and 26/40 equally)
-    const remaining = emp.max_hours - hoursUsed[emp.id];
-    score += (remaining / emp.max_hours) * 100;
-
-    // Spread: penalize employees already working many days
-    if (shiftsAssigned[emp.id] >= 5) score -= 300;
-    else if (shiftsAssigned[emp.id] >= 4) score -= 200;
-    else if (shiftsAssigned[emp.id] >= 3) score -= 100;
+    // Spread: penalize employees already working many days (stronger penalties)
+    if (shiftsAssigned[emp.id] >= 5) score -= 500;
+    else if (shiftsAssigned[emp.id] >= 4) score -= 350;
+    else if (shiftsAssigned[emp.id] >= 3) score -= 200;
 
     // Prefer employees who need this day to reach max hours
+    const remaining = emp.max_hours - hoursUsed[emp.id];
     const remainingAfterThisDay = remaining - tentH;
     if (remainingAfterThisDay >= 0 && remainingAfterThisDay <= 7) score += 50;
 
     // Boost employees with few slot type options (role-constrained)
-    // e.g., morning-only managers can only fill 2 slots/day vs non-managers filling 8
     const totalEligibleSlotTypes = eligibility[emp.id][day].relaxedSlots
       ? eligibility[emp.id][day].relaxedSlots.length : eligibility[emp.id][day].slots.length;
     if (totalEligibleSlotTypes > 0 && totalEligibleSlotTypes <= 2) score += 100;
@@ -506,6 +523,10 @@ function computeSlotScore(emp, slot, day, dayAssignments, employees, lockedMap, 
     if (period === 'night') score += 600;
     else score -= 300; // discourage non-night shifts for external co-ops
   }
+
+  // ═══ FAIRNESS: Utilization-based priority in slot assignment too ═══
+  const utilization = hoursUsed[emp.id] / emp.max_hours;
+  score += (1 - utilization) * 500; // 0-500 points: less-utilized employees preferred
 
   // Target hours match bonus (from Phase 1C) — strong bonus to honor the knapsack plan
   if (targetHours[emp.id] && targetHours[emp.id][day] === shiftHours) score += 400;
@@ -946,8 +967,11 @@ async function autoGenerate(weekStart, { overflowHours = 0 } = {}) {
         if (weekendCount >= 2) continue;
       }
 
-      const score = computeSlotScore(emp, slot, a.day_of_week, allAssignments.filter(x => x.day_of_week === a.day_of_week),
+      // Fairness-weighted score for backfill
+      let score = computeSlotScore(emp, slot, a.day_of_week, allAssignments.filter(x => x.day_of_week === a.day_of_week),
         employees, lockedMap, orderDaysMap, targetHours, hoursUsed);
+      // Extra fairness bonus for backfill: strongly prefer employees with 0 hours
+      if (hoursUsed[emp.id] === 0) score += 600;
       if (score > bestScore) {
         bestScore = score;
         bestEmp = emp;
