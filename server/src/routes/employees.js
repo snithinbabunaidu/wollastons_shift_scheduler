@@ -71,7 +71,7 @@ router.post('/', async (req, res) => {
     if (!name) return res.status(400).json({ error: 'Name is required' });
 
     const maxHrs = employment_type === 'coop' ? 40 :
-                   employment_type === 'external_coop' ? 14 : 20;
+                   employment_type === 'external_coop' ? 20 : 20;
 
     const [inserted] = await db('employees').insert({
       name,

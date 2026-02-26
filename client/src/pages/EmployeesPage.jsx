@@ -22,7 +22,7 @@ const ROLES = [
 const EMP_TYPES = [
   { value: 'part_time', label: 'Part-Time (20h max)' },
   { value: 'coop', label: 'Co-op/OPT (40h max)' },
-  { value: 'external_coop', label: 'External Co-op (Weekends Only)' },
+  { value: 'external_coop', label: 'External Co-op (20h max, Weekends + Night)' },
 ];
 
 function fmtTime(t) {
@@ -183,7 +183,7 @@ export default function EmployeesPage() {
     setEditDialog(prev => {
       const data = { ...prev.data, [field]: value };
       if (field === 'employment_type') {
-        data.max_hours = value === 'coop' ? 40 : value === 'external_coop' ? 14 : 20;
+        data.max_hours = value === 'coop' ? 40 : value === 'external_coop' ? 20 : 20;
       }
       return { ...prev, data };
     });
@@ -202,12 +202,21 @@ export default function EmployeesPage() {
 
   return (
     <Box>
-      <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
-        <Typography variant="h5">Employees</Typography>
+      <Stack direction="row" justifyContent="space-between" alignItems="center" mb={3}>
+        <Box>
+          <Typography variant="h5" sx={{ fontSize: '1.3rem' }}>Employees</Typography>
+          <Typography variant="body2" sx={{ color: '#6B6B80', fontSize: '0.8rem' }}>
+            {employees.length} team member{employees.length !== 1 ? 's' : ''} active
+          </Typography>
+        </Box>
         <Button variant="contained" startIcon={<Add />} onClick={openAdd}>Add Employee</Button>
       </Stack>
 
-      <TableContainer component={Paper}>
+      <TableContainer component={Paper} sx={{
+        background: 'rgba(26, 26, 46, 0.6)',
+        backdropFilter: 'blur(10px)',
+        border: '1px solid rgba(139, 131, 255, 0.08)',
+      }}>
         <Table>
           <TableHead>
             <TableRow>
@@ -222,41 +231,87 @@ export default function EmployeesPage() {
           </TableHead>
           <TableBody>
             {employees.map((emp) => (
-              <TableRow key={emp.id} hover>
+              <TableRow key={emp.id} hover sx={{ '&:hover': { bgcolor: 'rgba(108, 99, 255, 0.04)' } }}>
                 <TableCell>
-                  {emp.name}
-                  {!!emp.is_trainee && <Chip label="T" size="small" color="info" sx={{ ml: 1, height: 20 }} />}
+                  <Stack direction="row" alignItems="center" gap={1}>
+                    <Box sx={{
+                      width: 30, height: 30, borderRadius: 1.5,
+                      background: emp.is_trainee ? 'rgba(69, 183, 209, 0.12)' : 'rgba(108, 99, 255, 0.12)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: '0.75rem', fontWeight: 700,
+                      color: emp.is_trainee ? '#45B7D1' : '#8B83FF',
+                    }}>
+                      {emp.name.charAt(0).toUpperCase()}
+                    </Box>
+                    <Box>
+                      <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.85rem' }}>{emp.name}</Typography>
+                      {!!emp.is_trainee && (
+                        <Typography variant="caption" sx={{ color: '#45B7D1', fontSize: '0.65rem', fontWeight: 500 }}>Trainee</Typography>
+                      )}
+                    </Box>
+                  </Stack>
                 </TableCell>
-                <TableCell>{EMP_TYPES.find(t => t.value === emp.employment_type)?.label || emp.employment_type}</TableCell>
+                <TableCell>
+                  <Chip
+                    label={emp.employment_type === 'part_time' ? 'Part-Time' : emp.employment_type === 'coop' ? 'Co-op/OPT' : 'External'}
+                    size="small"
+                    sx={{
+                      fontSize: '0.7rem', height: 22,
+                      background: emp.employment_type === 'coop' ? 'rgba(46, 213, 115, 0.1)' : emp.employment_type === 'external_coop' ? 'rgba(255, 165, 2, 0.1)' : 'rgba(108, 99, 255, 0.1)',
+                      color: emp.employment_type === 'coop' ? '#2ED573' : emp.employment_type === 'external_coop' ? '#FFA502' : '#8B83FF',
+                      border: `1px solid ${emp.employment_type === 'coop' ? 'rgba(46, 213, 115, 0.2)' : emp.employment_type === 'external_coop' ? 'rgba(255, 165, 2, 0.2)' : 'rgba(108, 99, 255, 0.2)'}`,
+                    }}
+                  />
+                </TableCell>
                 <TableCell>
                   {(emp.roles || []).length === 0
-                    ? <Typography variant="body2" color="text.secondary">None</Typography>
+                    ? <Typography variant="body2" sx={{ color: '#6B6B80', fontSize: '0.8rem' }}>None</Typography>
                     : (emp.roles || []).map(r => (
                         <Chip
                           key={r}
                           label={ROLES.find(x => x.value === r)?.label || r}
                           size="small"
-                          sx={{ mr: 0.5, mb: 0.25 }}
+                          sx={{
+                            mr: 0.5, mb: 0.25, fontSize: '0.68rem', height: 20,
+                            background: 'rgba(139, 131, 255, 0.08)',
+                            border: '1px solid rgba(139, 131, 255, 0.15)',
+                          }}
                         />
                       ))
                   }
                 </TableCell>
-                <TableCell>{emp.max_hours}h</TableCell>
-                <TableCell>{emp.gender === 'male' ? 'M' : emp.gender === 'female' ? 'F' : '—'}</TableCell>
-                <TableCell>{emp.is_trainee ? 'Yes' : 'No'}</TableCell>
+                <TableCell>
+                  <Typography sx={{ fontFamily: '"JetBrains Mono", monospace', fontSize: '0.8rem', fontWeight: 500 }}>
+                    {emp.max_hours}h
+                  </Typography>
+                </TableCell>
+                <TableCell>
+                  <Typography sx={{ fontSize: '0.85rem' }}>
+                    {emp.gender === 'male' ? 'M' : emp.gender === 'female' ? 'F' : '\u2014'}
+                  </Typography>
+                </TableCell>
+                <TableCell>
+                  {emp.is_trainee ? (
+                    <Chip label="Yes" size="small" sx={{ height: 20, fontSize: '0.65rem', background: 'rgba(69, 183, 209, 0.12)', color: '#45B7D1' }} />
+                  ) : (
+                    <Typography sx={{ color: '#6B6B80', fontSize: '0.85rem' }}>No</Typography>
+                  )}
+                </TableCell>
                 <TableCell align="right">
-                  <IconButton size="small" onClick={() => openEdit(emp)} title="Edit"><Edit fontSize="small" /></IconButton>
-                  <IconButton size="small" onClick={() => openUnavailable(emp)} title="Class Schedule">
-                    <Schedule fontSize="small" />
-                  </IconButton>
-                  <IconButton size="small" onClick={() => openLocked(emp)} title="Locked Shifts"><Lock fontSize="small" /></IconButton>
-                  <IconButton size="small" onClick={() => handleDelete(emp.id)} title="Delete" color="error"><Delete fontSize="small" /></IconButton>
+                  <Stack direction="row" gap={0.5} justifyContent="flex-end">
+                    <IconButton size="small" onClick={() => openEdit(emp)} title="Edit" sx={{ color: '#8B83FF', '&:hover': { bgcolor: 'rgba(108, 99, 255, 0.08)' } }}><Edit fontSize="small" /></IconButton>
+                    <IconButton size="small" onClick={() => openUnavailable(emp)} title="Class Schedule" sx={{ color: '#FFA502', '&:hover': { bgcolor: 'rgba(255, 165, 2, 0.08)' } }}>
+                      <Schedule fontSize="small" />
+                    </IconButton>
+                    <IconButton size="small" onClick={() => openLocked(emp)} title="Locked Shifts" sx={{ color: '#2ED573', '&:hover': { bgcolor: 'rgba(46, 213, 115, 0.08)' } }}><Lock fontSize="small" /></IconButton>
+                    <IconButton size="small" onClick={() => handleDelete(emp.id)} title="Delete" sx={{ color: '#FF6B6B', '&:hover': { bgcolor: 'rgba(255, 107, 107, 0.08)' } }}><Delete fontSize="small" /></IconButton>
+                  </Stack>
                 </TableCell>
               </TableRow>
             ))}
             {employees.length === 0 && (
               <TableRow>
-                <TableCell colSpan={7} align="center" sx={{ py: 4, color: 'text.secondary' }}>
+                <TableCell colSpan={7} align="center" sx={{ py: 6, color: '#6B6B80' }}>
                   No employees yet. Click "Add Employee" to get started.
                 </TableCell>
               </TableRow>
@@ -409,7 +464,7 @@ export default function EmployeesPage() {
                 <Stack spacing={0.5}>
                   {blocks.map(b => (
                     <Stack key={b._idx} direction="row" alignItems="center" gap={1}
-                      sx={{ bgcolor: '#fff3e0', borderRadius: 1, px: 1.5, py: 0.5 }}
+                      sx={{ bgcolor: 'rgba(255, 165, 2, 0.06)', borderRadius: 2, px: 1.5, py: 0.5, border: '1px solid rgba(255, 165, 2, 0.12)' }}
                     >
                       <Chip
                         label={`${fmtTime(b.start_time)} - ${fmtTime(b.end_time)}`}

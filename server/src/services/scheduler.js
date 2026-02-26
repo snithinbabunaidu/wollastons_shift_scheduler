@@ -130,7 +130,7 @@ function buildEligibilityMatrix(employees, daySlots, unavailMap, oldAvailMap) {
   for (const emp of employees) {
     eligibility[emp.id] = {};
     for (let day = 0; day < 7; day++) {
-      // External coop: weekends only
+      // External coop: weekends only, target night shifts
       if (emp.employment_type === 'external_coop' && day !== 0 && day !== 6) {
         eligibility[emp.id][day] = { eligible: false, slots: [], minHours: Infinity, maxHours: 0, durations: new Set() };
         continue;
@@ -499,6 +499,12 @@ function computeSlotScore(emp, slot, day, dayAssignments, employees, lockedMap, 
         employees.find(e => e.id === a.employee_id && e.gender === 'male')
     );
     if (!hasMaleInNight && emp.gender === 'male') score += 400;
+  }
+
+  // External co-ops: strongly prefer night shifts
+  if (emp.employment_type === 'external_coop') {
+    if (period === 'night') score += 600;
+    else score -= 300; // discourage non-night shifts for external co-ops
   }
 
   // Target hours match bonus (from Phase 1C) — strong bonus to honor the knapsack plan

@@ -10,9 +10,9 @@ exports.seed = async function (knex) {
   await knex('employees').del();
   await knex('users').del();
 
-  // Default admin user (password: admin123)
-  const hash = await bcrypt.hash('admin123', 10);
-  await knex('users').insert({ username: 'admin', password_hash: hash });
+  // Default admin user (password: wollys@123)
+  const hash = await bcrypt.hash('wollys@123', 10);
+  await knex('users').insert({ username: 'wollys_admin', password_hash: hash });
 
   // Default shift configurations
   const shiftConfigs = [

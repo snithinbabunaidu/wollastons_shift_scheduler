@@ -17,6 +17,12 @@ function calcHours(startTime, endTime) {
   return (endMin - startMin) / 60;
 }
 
+function parseRoles(roleJson) {
+  if (!roleJson) return [];
+  if (Array.isArray(roleJson)) return roleJson;
+  try { return JSON.parse(roleJson); } catch { return roleJson ? [roleJson] : []; }
+}
+
 // Get schedule for a week
 router.get('/:weekStart', async (req, res) => {
   try {
@@ -155,9 +161,8 @@ router.get('/:weekStart/available/:dayOfWeek/:shiftPeriod', async (req, res) => 
       .where({ shift_period: shiftPeriod })
       .orderBy('slot_index');
 
-    // Get the overall time range for this period (earliest start, latest end)
-    const periodStart = shiftConfigs[0]?.start_time || '06:00';
-    const periodEnd = shiftConfigs[shiftConfigs.length - 1]?.end_time || '13:00';
+    // Get ALL shift configs for hour calculation
+    const allShiftConfigs = await db('shift_configs').orderBy(['shift_period', 'slot_index']);
 
     // Load unavailable times for all employees (base + this week's overrides)
     let unavailableTimes = [];
@@ -186,30 +191,81 @@ router.get('/:weekStart/available/:dayOfWeek/:shiftPeriod', async (req, res) => 
     } catch (e) {
       // ignore
     }
-    const oldAvailSet = new Set();
     const oldUnavailSet = new Set();
     for (const a of oldAvailRows) {
-      if (a.is_available) oldAvailSet.add(a.employee_id);
-      else oldUnavailSet.add(a.employee_id);
+      if (!a.is_available) oldUnavailSet.add(a.employee_id);
     }
 
-    // Filter employees by time-based availability
-    const available = allEmployees.filter(emp => {
-      const empBlocks = unavailMap[emp.id];
+    // Load locked schedule entries for this day/period to check conflicts
+    const lockedEntries = await db('schedules')
+      .where({ week_start_date: weekStart, day_of_week: day, shift_period: shiftPeriod, is_locked: true })
+      .whereNotNull('employee_id');
+    const lockedEmpIds = new Set(lockedEntries.map(e => e.employee_id));
 
-      // If employee has time-based blocks, check overlap with period range
+    // Check if employee already has an assignment on this day (one-shift-per-day)
+    const dayAssignments = await db('schedules')
+      .where({ week_start_date: weekStart, day_of_week: day })
+      .whereNotNull('employee_id');
+    const assignedOnDay = new Set(dayAssignments.map(a => a.employee_id));
+
+    // Check night shift previous day (for morning rest rule)
+    let prevDayNightWorkers = new Set();
+    if (shiftPeriod === 'morning' && day > 0) {
+      const prevNight = await db('schedules')
+        .where({ week_start_date: weekStart, day_of_week: day - 1, shift_period: 'night' })
+        .whereNotNull('employee_id');
+      prevDayNightWorkers = new Set(prevNight.map(a => a.employee_id));
+    }
+
+    // Filter employees by all constraints
+    const available = allEmployees.filter(emp => {
+      const roles = parseRoles(emp.role);
+
+      // Employment type restrictions
+      // External co-ops: target weekends, but allowed on weekdays if night shift preference
+      if (emp.employment_type === 'external_coop') {
+        if (day !== 0 && day !== 6) return false;
+        // External co-ops: only night shifts (unless explicitly no night-only restriction)
+        if (shiftPeriod !== 'night') return false;
+      }
+
+      // Trainee restrictions: cannot work 6 AM morning shifts
+      if (emp.is_trainee && shiftPeriod === 'morning') {
+        const has6AM = shiftConfigs.some(c => c.start_time === '06:00');
+        // If ALL slots are 6AM, trainee can't work this period at all for early slots
+        // But they can still work later morning slots - check per-slot availability
+      }
+
+      // Manager restrictions: managers restricted to their period
+      const hasAnyManagerRole = roles.some(r => r.endsWith('_manager'));
+      if (hasAnyManagerRole) {
+        const canWorkPeriod = roles.some(r => {
+          if (!r.endsWith('_manager')) return false;
+          return r.replace('_manager', '') === shiftPeriod;
+        });
+        if (!canWorkPeriod) return false;
+      }
+
+      // Night-to-morning rest rule: if worked night previous day, morning must be 10AM+
+      if (shiftPeriod === 'morning' && prevDayNightWorkers.has(emp.id)) {
+        const hasLateSlot = shiftConfigs.some(c => c.start_time >= '10:00');
+        if (!hasLateSlot) return false;
+      }
+
+      // Check time-based unavailability
+      const empBlocks = unavailMap[emp.id];
       if (empBlocks && empBlocks.length > 0) {
-        // Check if ANY shift config slot in this period is free from overlap
         const hasAvailableSlot = shiftConfigs.some(config => {
           return !empBlocks.some(block =>
             timesOverlap(config.start_time, config.end_time, block.start_time, block.end_time)
           );
         });
-        return hasAvailableSlot;
+        if (!hasAvailableSlot) return false;
+      } else {
+        // Fall back to old availability
+        if (oldUnavailSet.has(emp.id)) return false;
       }
 
-      // Fall back to old availability
-      if (oldUnavailSet.has(emp.id)) return false;
       return true;
     });
 
@@ -221,23 +277,37 @@ router.get('/:weekStart/available/:dayOfWeek/:shiftPeriod', async (req, res) => 
     const hourMap = {};
     for (const s of weekSchedules) {
       if (!hourMap[s.employee_id]) hourMap[s.employee_id] = 0;
-      const config = shiftConfigs.find(c => c.shift_period === s.shift_period && c.slot_index === s.slot_index);
+      const config = allShiftConfigs.find(c => c.shift_period === s.shift_period && c.slot_index === s.slot_index);
       const startTime = s.start_time || config?.start_time;
       const endTime = s.end_time || config?.end_time;
       hourMap[s.employee_id] += calcHours(startTime, endTime);
     }
 
     const result = available.map(emp => {
-      let roles = [];
-      try { roles = JSON.parse(emp.role || '[]'); } catch { roles = emp.role ? [emp.role] : []; }
+      const roles = parseRoles(emp.role);
       const { role, ...rest } = emp;
+      const currentHours = hourMap[emp.id] || 0;
+      const hoursRemaining = emp.max_hours - currentHours;
+      const isAssignedToday = assignedOnDay.has(emp.id);
+      const isLockedHere = lockedEmpIds.has(emp.id);
       return {
         ...rest,
         roles,
-        current_hours: hourMap[emp.id] || 0,
-        hours_remaining: emp.max_hours - (hourMap[emp.id] || 0),
+        current_hours: currentHours,
+        hours_remaining: hoursRemaining,
+        is_assigned_today: isAssignedToday,
+        is_locked_here: isLockedHere,
       };
-    }).filter(emp => emp.hours_remaining > 4);
+    }).filter(emp => emp.hours_remaining > 0); // Show all with remaining hours (was > 4, too restrictive)
+
+    // Sort: available first (not assigned today), then assigned
+    result.sort((a, b) => {
+      if (a.is_locked_here && !b.is_locked_here) return -1;
+      if (!a.is_locked_here && b.is_locked_here) return 1;
+      if (!a.is_assigned_today && b.is_assigned_today) return -1;
+      if (a.is_assigned_today && !b.is_assigned_today) return 1;
+      return b.hours_remaining - a.hours_remaining;
+    });
 
     res.json(result);
   } catch (err) {

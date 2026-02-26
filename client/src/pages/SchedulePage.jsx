@@ -15,9 +15,19 @@ const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frid
 const PERIODS = ['morning', 'afternoon', 'night'];
 const PERIOD_LABELS = { morning: 'Morning', afternoon: 'Afternoon', night: 'Night' };
 const PERIOD_COLORS = {
-  morning: '#fff8e1',
-  afternoon: '#e3f2fd',
-  night: '#f3e5f5',
+  morning: 'rgba(255, 165, 2, 0.08)',
+  afternoon: 'rgba(69, 183, 209, 0.08)',
+  night: 'rgba(108, 99, 255, 0.08)',
+};
+const PERIOD_BORDER_COLORS = {
+  morning: 'rgba(255, 165, 2, 0.2)',
+  afternoon: 'rgba(69, 183, 209, 0.2)',
+  night: 'rgba(108, 99, 255, 0.2)',
+};
+const PERIOD_ACCENT = {
+  morning: '#FFA502',
+  afternoon: '#45B7D1',
+  night: '#8B83FF',
 };
 
 function getWeekStart(date) {
@@ -398,24 +408,50 @@ export default function SchedulePage() {
   return (
     <Box>
       {/* Header */}
-      <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2} flexWrap="wrap" gap={1}>
-        <Stack direction="row" alignItems="center" gap={1}>
-          <IconButton onClick={() => changeWeek(-1)}><ChevronLeft /></IconButton>
-          <Typography variant="h5">Week of {weekStart}</Typography>
-          <IconButton onClick={() => changeWeek(1)}><ChevronRight /></IconButton>
+      <Stack direction="row" justifyContent="space-between" alignItems="center" mb={3} flexWrap="wrap" gap={1}>
+        <Stack direction="row" alignItems="center" gap={0.5}>
+          <IconButton onClick={() => changeWeek(-1)} sx={{
+            background: 'rgba(108, 99, 255, 0.08)',
+            '&:hover': { background: 'rgba(108, 99, 255, 0.15)' },
+          }}><ChevronLeft /></IconButton>
+          <Box sx={{ px: 2 }}>
+            <Typography variant="h5" sx={{ fontSize: '1.3rem' }}>
+              Week of{' '}
+              <Box component="span" sx={{
+                background: 'linear-gradient(135deg, #6C63FF, #45B7D1)',
+                WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+              }}>{weekStart}</Box>
+            </Typography>
+          </Box>
+          <IconButton onClick={() => changeWeek(1)} sx={{
+            background: 'rgba(108, 99, 255, 0.08)',
+            '&:hover': { background: 'rgba(108, 99, 255, 0.15)' },
+          }}><ChevronRight /></IconButton>
         </Stack>
-        <Stack direction="row" gap={1}>
-          <Button variant="outlined" startIcon={<EventBusy />} onClick={openWeeklyAvail}>
-            Adjust Availability
+        <Stack direction="row" gap={1} flexWrap="wrap">
+          <Button variant="outlined" size="small" startIcon={<EventBusy />} onClick={openWeeklyAvail}>
+            Availability
           </Button>
-          <Button variant="outlined" startIcon={<AutoFixHigh />} onClick={handleAutoGenerate} disabled={generating}>
+          <Button
+            variant="outlined" size="small" startIcon={<AutoFixHigh />}
+            onClick={handleAutoGenerate} disabled={generating}
+            sx={{
+              borderColor: 'rgba(46, 213, 115, 0.3)', color: '#2ED573',
+              '&:hover': { borderColor: 'rgba(46, 213, 115, 0.5)', background: 'rgba(46, 213, 115, 0.08)' },
+            }}
+          >
             {generating ? 'Generating...' : 'Auto-Generate'}
           </Button>
-          <Button variant="contained" startIcon={<Save />} onClick={handleSave} disabled={saving || !dirty}>
+          <Button variant="contained" size="small" startIcon={<Save />} onClick={handleSave} disabled={saving || !dirty}>
             {saving ? 'Saving...' : 'Save'}
           </Button>
-          <Button variant="outlined" startIcon={<PictureAsPdf />} onClick={handleExportPDF}>
-            Export PDF
+          <Button variant="outlined" size="small" startIcon={<PictureAsPdf />} onClick={handleExportPDF}
+            sx={{
+              borderColor: 'rgba(255, 107, 107, 0.3)', color: '#FF6B6B',
+              '&:hover': { borderColor: 'rgba(255, 107, 107, 0.5)', background: 'rgba(255, 107, 107, 0.08)' },
+            }}
+          >
+            PDF
           </Button>
         </Stack>
       </Stack>
@@ -437,18 +473,33 @@ export default function SchedulePage() {
         const dateStr = `${String(dayDate.getMonth() + 1).padStart(2, '0')}/${String(dayDate.getDate()).padStart(2, '0')}`;
 
         return (
-          <Card key={day} sx={{ mb: 2 }} variant="outlined">
+          <Card key={day} sx={{
+            mb: 2,
+            background: 'rgba(26, 26, 46, 0.6)',
+            backdropFilter: 'blur(10px)',
+            border: '1px solid rgba(139, 131, 255, 0.08)',
+            transition: 'all 0.2s ease',
+            '&:hover': { border: '1px solid rgba(139, 131, 255, 0.15)' },
+          }}>
             <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
               {/* Day header */}
               <Stack direction="row" alignItems="center" gap={1} mb={1}>
-                <Typography variant="h6" sx={{ fontWeight: 'bold', minWidth: 100 }}>
-                  {DAY_NAMES[day]} <Typography component="span" variant="body2" color="text.secondary">{dateStr}</Typography>
+                <Typography variant="h6" sx={{ fontWeight: 700, minWidth: 100, fontSize: '1rem' }}>
+                  {DAY_NAMES[day]} <Typography component="span" variant="body2" sx={{ color: '#6B6B80', fontFamily: '"JetBrains Mono", monospace', fontSize: '0.72rem' }}>{dateStr}</Typography>
                 </Typography>
                 {isAgOrderDay && (
-                  <Chip label="AG Order Day" size="small" color="success" variant="outlined" sx={{ fontSize: '0.7rem', height: 22 }} />
+                  <Chip label="AG Order" size="small" sx={{
+                    fontSize: '0.65rem', height: 20,
+                    background: 'rgba(46, 213, 115, 0.12)', color: '#2ED573',
+                    border: '1px solid rgba(46, 213, 115, 0.25)',
+                  }} />
                 )}
                 {isUsOrderDay && (
-                  <Chip label="US Order Day" size="small" color="primary" variant="outlined" sx={{ fontSize: '0.7rem', height: 22 }} />
+                  <Chip label="US Order" size="small" sx={{
+                    fontSize: '0.65rem', height: 20,
+                    background: 'rgba(108, 99, 255, 0.12)', color: '#8B83FF',
+                    border: '1px solid rgba(108, 99, 255, 0.25)',
+                  }} />
                 )}
                 {/* Employee hours summary for this day */}
                 <Box sx={{ ml: 'auto' }}>
@@ -484,14 +535,19 @@ export default function SchedulePage() {
                       sx={{
                         flex: 1,
                         bgcolor: PERIOD_COLORS[period],
-                        borderRadius: 1,
+                        borderRadius: 2,
                         p: 1,
                         minWidth: 0,
+                        border: `1px solid ${PERIOD_BORDER_COLORS[period]}`,
                       }}
                     >
                       {/* Period header with slot count adjuster */}
                       <Stack direction="row" justifyContent="space-between" alignItems="center" mb={0.5}>
-                        <Typography variant="subtitle2" sx={{ fontWeight: 'bold', fontSize: '0.8rem' }}>
+                        <Typography variant="subtitle2" sx={{
+                          fontWeight: 700, fontSize: '0.78rem',
+                          color: PERIOD_ACCENT[period],
+                          textTransform: 'uppercase', letterSpacing: '0.04em',
+                        }}>
                           {PERIOD_LABELS[period]}
                         </Typography>
                         <Stack direction="row" alignItems="center" gap={0}>
@@ -528,10 +584,12 @@ export default function SchedulePage() {
                                 display: 'flex',
                                 alignItems: 'center',
                                 gap: 0.5,
-                                bgcolor: isLocked ? 'rgba(76, 175, 80, 0.12)' : 'rgba(255,255,255,0.6)',
-                                borderRadius: 0.5,
+                                bgcolor: isLocked ? 'rgba(46, 213, 115, 0.08)' : 'rgba(15, 15, 26, 0.4)',
+                                borderRadius: 1.5,
                                 p: 0.5,
-                                border: overHours ? '2px solid #f44336' : '1px solid rgba(0,0,0,0.08)',
+                                border: overHours ? '1px solid rgba(255, 107, 107, 0.5)' : isLocked ? '1px solid rgba(46, 213, 115, 0.2)' : '1px solid rgba(139, 131, 255, 0.06)',
+                                transition: 'all 0.15s ease',
+                                '&:hover': { bgcolor: isLocked ? 'rgba(46, 213, 115, 0.12)' : 'rgba(15, 15, 26, 0.6)' },
                               }}
                             >
                               {/* Opening time */}
@@ -571,16 +629,28 @@ export default function SchedulePage() {
                                   const availMatch = avail.find(e => e.id === option.id);
                                   const isAvailable = !!availMatch;
                                   const hoursLeft = availMatch?.hours_remaining;
+                                  const isAssignedToday = availMatch?.is_assigned_today;
                                   return (
                                     <li {...props} key={option.id}>
-                                      <Stack direction="row" alignItems="center" gap={0.5} sx={{ width: '100%', opacity: isAvailable ? 1 : 0.5 }}>
+                                      <Stack direction="row" alignItems="center" gap={0.5} sx={{ width: '100%', opacity: isAvailable && !isAssignedToday ? 1 : 0.4 }}>
                                         <Typography sx={{ fontSize: '0.8rem' }}>{option.name}</Typography>
-                                        {!!option.is_trainee && <Chip label="T" size="small" sx={{ height: 16, fontSize: '0.6rem' }} />}
+                                        {!!option.is_trainee && <Chip label="T" size="small" sx={{ height: 16, fontSize: '0.6rem', background: 'rgba(69, 183, 209, 0.15)', color: '#45B7D1' }} />}
                                         {hoursLeft !== undefined && (
-                                          <Chip label={`${hoursLeft}h`} size="small" color={hoursLeft <= 7 ? 'warning' : 'default'} sx={{ height: 16, fontSize: '0.6rem', ml: 'auto' }} />
+                                          <Chip
+                                            label={`${hoursLeft.toFixed(0)}h left`}
+                                            size="small"
+                                            sx={{
+                                              height: 16, fontSize: '0.6rem', ml: 'auto',
+                                              background: hoursLeft <= 7 ? 'rgba(255, 165, 2, 0.15)' : 'rgba(46, 213, 115, 0.12)',
+                                              color: hoursLeft <= 7 ? '#FFA502' : '#2ED573',
+                                            }}
+                                          />
                                         )}
-                                        {!isAvailable && avail.length > 0 && (
-                                          <Typography sx={{ fontSize: '0.65rem', color: 'text.disabled', ml: 'auto' }}>unavailable</Typography>
+                                        {isAssignedToday && (
+                                          <Typography sx={{ fontSize: '0.6rem', color: '#FF6B6B', ml: 'auto', fontWeight: 600 }}>working today</Typography>
+                                        )}
+                                        {!isAvailable && avail.length > 0 && !isAssignedToday && (
+                                          <Typography sx={{ fontSize: '0.6rem', color: '#6B6B80', ml: 'auto' }}>unavailable</Typography>
                                         )}
                                       </Stack>
                                     </li>
@@ -819,7 +889,7 @@ export default function SchedulePage() {
               <Stack spacing={0.5}>
                 {weeklyAvailDialog.overrides.map((o, idx) => (
                   <Stack key={idx} direction="row" alignItems="center" gap={1}
-                    sx={{ bgcolor: '#fce4ec', borderRadius: 1, px: 1.5, py: 0.5 }}
+                    sx={{ bgcolor: 'rgba(255, 107, 107, 0.06)', borderRadius: 2, px: 1.5, py: 0.5, border: '1px solid rgba(255, 107, 107, 0.12)' }}
                   >
                     <Chip label={o.employee_name || employees.find(e => e.id === o.employee_id)?.name || '?'}
                       size="small" color="error" variant="outlined" sx={{ fontSize: '0.75rem' }} />
