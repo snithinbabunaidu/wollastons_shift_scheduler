@@ -37,6 +37,13 @@ function getWeekStart(date) {
   return d.toISOString().split('T')[0];
 }
 
+function getNextWeekStart() {
+  const d = new Date();
+  const day = d.getDay();
+  d.setDate(d.getDate() - day + 7); // next Sunday
+  return d.toISOString().split('T')[0];
+}
+
 function fmt(time24) {
   if (!time24) return '';
   const [h, m] = time24.split(':').map(Number);
@@ -56,7 +63,7 @@ function calcHours(startTime, endTime) {
 }
 
 export default function SchedulePage() {
-  const [weekStart, setWeekStart] = useState(getWeekStart(new Date()));
+  const [weekStart, setWeekStart] = useState(getNextWeekStart());
   const [schedule, setSchedule] = useState({});
   const [shiftConfigs, setShiftConfigs] = useState([]);
   const [employees, setEmployees] = useState([]);
