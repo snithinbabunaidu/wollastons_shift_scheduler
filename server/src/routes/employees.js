@@ -32,6 +32,131 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Export all availability data (for backup)
+// NOTE: These routes MUST be before /:id to avoid matching as an id
+router.get('/export-availability', async (req, res) => {
+  try {
+    const employees = await db('employees').where({ active: true }).orderBy('name');
+    const result = [];
+
+    for (const emp of employees) {
+      const availability = await db('availability').where({ employee_id: emp.id });
+      const unavailableTimes = await db('unavailable_times')
+        .where({ employee_id: emp.id, week_start_date: null })
+        .orderBy(['day_of_week', 'start_time']);
+      const lockedShifts = await db('locked_shifts').where({ employee_id: emp.id });
+
+      result.push({
+        name: emp.name,
+        employment_type: emp.employment_type,
+        is_trainee: emp.is_trainee,
+        roles: parseRoles(emp.role),
+        max_hours: emp.max_hours,
+        gender: emp.gender,
+        availability: availability.map(a => ({
+          day_of_week: a.day_of_week,
+          shift_period: a.shift_period,
+          is_available: a.is_available,
+        })),
+        unavailable_times: unavailableTimes.map(u => ({
+          day_of_week: u.day_of_week,
+          start_time: u.start_time,
+          end_time: u.end_time,
+          label: u.label,
+        })),
+        locked_shifts: lockedShifts.map(l => ({
+          day_of_week: l.day_of_week,
+          shift_period: l.shift_period,
+        })),
+      });
+    }
+
+    res.json({
+      exported_at: new Date().toISOString(),
+      version: '1.0',
+      employees: result,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Import availability data (for restore)
+router.post('/import-availability', async (req, res) => {
+  try {
+    const { employees: importData } = req.body;
+    if (!importData || !Array.isArray(importData)) {
+      return res.status(400).json({ error: 'Invalid format. Expected { employees: [...] }' });
+    }
+
+    let updated = 0;
+    let skipped = 0;
+
+    for (const empData of importData) {
+      // Match by name (case-insensitive)
+      const existing = await db('employees')
+        .where({ active: true })
+        .whereRaw('LOWER(name) = ?', [empData.name.toLowerCase()])
+        .first();
+
+      if (!existing) {
+        skipped++;
+        continue;
+      }
+
+      // Update availability grid
+      if (empData.availability && Array.isArray(empData.availability)) {
+        for (const a of empData.availability) {
+          await db('availability')
+            .where({ employee_id: existing.id, day_of_week: a.day_of_week, shift_period: a.shift_period })
+            .update({ is_available: a.is_available });
+        }
+      }
+
+      // Update unavailable times (class schedule)
+      if (empData.unavailable_times && Array.isArray(empData.unavailable_times)) {
+        await db('unavailable_times')
+          .where({ employee_id: existing.id, week_start_date: null })
+          .del();
+        if (empData.unavailable_times.length > 0) {
+          await db('unavailable_times').insert(
+            empData.unavailable_times.map(u => ({
+              employee_id: existing.id,
+              day_of_week: u.day_of_week,
+              start_time: u.start_time,
+              end_time: u.end_time,
+              label: u.label || null,
+              week_start_date: null,
+            }))
+          );
+        }
+      }
+
+      // Update locked shifts
+      if (empData.locked_shifts && Array.isArray(empData.locked_shifts)) {
+        await db('locked_shifts').where({ employee_id: existing.id }).del();
+        if (empData.locked_shifts.length > 0) {
+          await db('locked_shifts').insert(
+            empData.locked_shifts.map(l => ({
+              employee_id: existing.id,
+              day_of_week: l.day_of_week,
+              shift_period: l.shift_period,
+            }))
+          );
+        }
+      }
+
+      updated++;
+    }
+
+    res.json({ success: true, updated, skipped, total: importData.length });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Get all weekly overrides for all employees for a given week
 // NOTE: This route MUST be before /:id to avoid "weekly-overrides" matching as an id
 router.get('/weekly-overrides/:weekStart', async (req, res) => {

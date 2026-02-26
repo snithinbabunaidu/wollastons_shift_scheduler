@@ -5,7 +5,7 @@ import {
   DialogActions, TextField, Select, MenuItem, FormControl, InputLabel,
   Checkbox, FormControlLabel, Chip, Stack, Alert,
 } from '@mui/material';
-import { Add, Edit, Delete, Lock, Schedule, Close } from '@mui/icons-material';
+import { Add, Edit, Delete, Lock, Schedule, Close, BlockOutlined, Download, Upload } from '@mui/icons-material';
 import * as api from '../services/api';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -137,6 +137,84 @@ export default function EmployeesPage() {
     }
   };
 
+  // Mark entire day as unavailable (00:00 - 23:59)
+  const markDayUnavailable = (dayOfWeek) => {
+    setUnavailDialog(prev => {
+      // Remove any existing blocks for this day first
+      const filteredBlocks = prev.blocks.filter(b => b.day_of_week !== dayOfWeek);
+      // Add a single all-day block
+      filteredBlocks.push({
+        employee_id: prev.employeeId,
+        day_of_week: dayOfWeek,
+        start_time: '00:00',
+        end_time: '23:59',
+        label: 'Not Available All Day',
+      });
+      return { ...prev, blocks: filteredBlocks };
+    });
+  };
+
+  // Check if a day is already marked as all-day unavailable
+  const isDayFullyUnavailable = (dayOfWeek) => {
+    if (!unavailDialog) return false;
+    return unavailDialog.blocks.some(
+      b => b.day_of_week === dayOfWeek && b.start_time === '00:00' && b.end_time === '23:59'
+    );
+  };
+
+  // Clear all blocks for a day
+  const clearDayUnavailable = (dayOfWeek) => {
+    setUnavailDialog(prev => ({
+      ...prev,
+      blocks: prev.blocks.filter(b => b.day_of_week !== dayOfWeek),
+    }));
+  };
+
+  // Download all availability data as JSON backup
+  const handleDownloadAvailability = async () => {
+    try {
+      const res = await api.exportAvailability();
+      const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `wollastons-availability-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      setError('Failed to download availability data');
+    }
+  };
+
+  // Upload availability data from JSON backup
+  const handleUploadAvailability = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        if (!data.employees || !Array.isArray(data.employees)) {
+          setError('Invalid file format. Expected availability export JSON.');
+          return;
+        }
+        if (!confirm(`This will update availability for ${data.employees.length} employees. Existing availability will be overwritten. Continue?`)) return;
+        await api.importAvailability(data);
+        loadEmployees();
+        setError('');
+        alert('Availability data imported successfully!');
+      } catch (err) {
+        console.error(err);
+        setError('Failed to import: ' + (err.response?.data?.error || err.message));
+      }
+    };
+    input.click();
+  };
+
   // Locked shifts dialog
   const openLocked = async (emp) => {
     try {
@@ -209,7 +287,19 @@ export default function EmployeesPage() {
             {employees.length} team member{employees.length !== 1 ? 's' : ''} active
           </Typography>
         </Box>
-        <Button variant="contained" startIcon={<Add />} onClick={openAdd}>Add Employee</Button>
+        <Stack direction="row" gap={1}>
+          <Button variant="outlined" size="small" startIcon={<Download />} onClick={handleDownloadAvailability}
+            sx={{ borderColor: 'rgba(46, 213, 115, 0.3)', color: '#2ED573', '&:hover': { borderColor: '#2ED573', bgcolor: 'rgba(46, 213, 115, 0.08)' } }}
+          >
+            Backup
+          </Button>
+          <Button variant="outlined" size="small" startIcon={<Upload />} onClick={handleUploadAvailability}
+            sx={{ borderColor: 'rgba(69, 183, 209, 0.3)', color: '#45B7D1', '&:hover': { borderColor: '#45B7D1', bgcolor: 'rgba(69, 183, 209, 0.08)' } }}
+          >
+            Restore
+          </Button>
+          <Button variant="contained" startIcon={<Add />} onClick={openAdd}>Add Employee</Button>
+        </Stack>
       </Stack>
 
       <TableContainer component={Paper} sx={{
@@ -451,6 +541,38 @@ export default function EmployeesPage() {
                 Add
               </Button>
             </Stack>
+          </Paper>
+
+          {/* Quick "Not Available All Day" toggles */}
+          <Paper variant="outlined" sx={{ p: 2, mb: 2, border: '1px solid rgba(255, 107, 107, 0.15)' }}>
+            <Typography variant="subtitle2" sx={{ mb: 1, color: '#FF6B6B' }}>
+              <BlockOutlined sx={{ fontSize: 16, mr: 0.5, verticalAlign: 'text-bottom' }} />
+              Not Available All Day
+            </Typography>
+            <Stack direction="row" gap={0.75} flexWrap="wrap">
+              {DAY_NAMES.map((dayName, dayIdx) => {
+                const isOff = isDayFullyUnavailable(dayIdx);
+                return (
+                  <Chip
+                    key={dayIdx}
+                    label={DAY_SHORT[dayIdx]}
+                    onClick={() => isOff ? clearDayUnavailable(dayIdx) : markDayUnavailable(dayIdx)}
+                    sx={{
+                      fontWeight: 600, fontSize: '0.78rem', cursor: 'pointer',
+                      background: isOff ? 'rgba(255, 107, 107, 0.15)' : 'rgba(139, 131, 255, 0.06)',
+                      color: isOff ? '#FF6B6B' : '#9B9BB4',
+                      border: isOff ? '1px solid rgba(255, 107, 107, 0.4)' : '1px solid rgba(139, 131, 255, 0.15)',
+                      '&:hover': {
+                        background: isOff ? 'rgba(255, 107, 107, 0.25)' : 'rgba(255, 107, 107, 0.1)',
+                      },
+                    }}
+                  />
+                );
+              })}
+            </Stack>
+            <Typography variant="caption" sx={{ color: '#6B6B80', mt: 0.5, display: 'block' }}>
+              Click a day to toggle. Red = unavailable all day. Click again to clear.
+            </Typography>
           </Paper>
 
           {/* Blocks grouped by day */}

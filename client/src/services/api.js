@@ -73,4 +73,8 @@ export const downloadPDF = (weekStart) =>
 export const getOrderDays = () => api.get('/order-days');
 export const updateOrderDays = (ag, us) => api.put('/order-days', { ag, us });
 
+// Availability Backup/Restore
+export const exportAvailability = () => api.get('/employees/export-availability');
+export const importAvailability = (data) => api.post('/employees/import-availability', data);
+
 export default api;
