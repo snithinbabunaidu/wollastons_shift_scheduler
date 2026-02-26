@@ -4,6 +4,7 @@ import {
   Box, Card, CardContent, TextField, Button, Typography, Alert, Stack,
 } from '@mui/material';
 import { useAuth } from '../context/AuthContext';
+import wollysLogo from '../assets/wollys-logo.png';
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
@@ -50,24 +51,16 @@ export default function LoginPage() {
         <CardContent sx={{ p: 5 }}>
           {/* Brand */}
           <Stack alignItems="center" mb={4}>
-            <Box sx={{
-              width: 56, height: 56,
-              background: 'linear-gradient(135deg, #6C63FF 0%, #FF6B6B 100%)',
-              borderRadius: 3,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontWeight: 800, fontSize: '1.5rem', color: '#fff',
-              mb: 2,
-              boxShadow: '0 8px 25px rgba(108, 99, 255, 0.35)',
-            }}>
-              W
-            </Box>
-            <Typography variant="h4" align="center" sx={{
-              background: 'linear-gradient(135deg, #E8E8F0 0%, #9B9BB4 100%)',
-              WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-              fontSize: '1.8rem',
-            }}>
-              Wollaston's
-            </Typography>
+            <Box
+              component="img"
+              src={wollysLogo}
+              alt="Wollaston's"
+              sx={{
+                width: 180, height: 'auto',
+                mb: 2,
+                filter: 'drop-shadow(0 8px 25px rgba(108, 99, 255, 0.35))',
+              }}
+            />
             <Typography variant="caption" sx={{
               color: '#6C63FF', fontWeight: 600, letterSpacing: '0.15em',
               fontFamily: '"Inter", sans-serif', fontSize: '0.75rem', mt: 0.5,

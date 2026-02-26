@@ -8,6 +8,7 @@ import {
   Menu as MenuIcon, CalendarMonth, People, Settings, Logout,
 } from '@mui/icons-material';
 import { useAuth } from '../context/AuthContext';
+import wollysLogo from '../assets/wollys-logo.png';
 
 const DRAWER_WIDTH = 260;
 
@@ -25,27 +26,20 @@ export default function Layout() {
 
   const drawer = (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ p: 2.5, pb: 2 }}>
-        <Stack direction="row" alignItems="center" gap={1.5}>
-          <Box sx={{
-            width: 40, height: 40,
-            background: 'linear-gradient(135deg, #6C63FF 0%, #FF6B6B 100%)',
-            borderRadius: 2.5,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontWeight: 800, fontSize: '1.1rem', color: '#fff',
-            boxShadow: '0 4px 15px rgba(108, 99, 255, 0.3)',
-          }}>
-            W
-          </Box>
-          <Box>
-            <Typography variant="subtitle1" sx={{ fontWeight: 700, lineHeight: 1.2, color: '#E8E8F0' }}>
-              Wollaston's
-            </Typography>
-            <Typography variant="caption" sx={{ color: '#6C63FF', fontWeight: 500, fontFamily: '"Inter", sans-serif', fontSize: '0.68rem', letterSpacing: '0.05em' }}>
-              SHIFT SCHEDULER
-            </Typography>
-          </Box>
-        </Stack>
+      <Box sx={{ p: 2, pb: 1.5, textAlign: 'center' }}>
+        <Box
+          component="img"
+          src={wollysLogo}
+          alt="Wollaston's"
+          sx={{
+            width: 140, height: 'auto',
+            filter: 'drop-shadow(0 4px 15px rgba(108, 99, 255, 0.3))',
+            mb: 0.5,
+          }}
+        />
+        <Typography variant="caption" display="block" sx={{ color: '#6C63FF', fontWeight: 600, fontFamily: '"Inter", sans-serif', fontSize: '0.65rem', letterSpacing: '0.1em' }}>
+          SHIFT SCHEDULER
+        </Typography>
       </Box>
       <Divider sx={{ mx: 2, borderColor: 'rgba(139, 131, 255, 0.08)' }} />
 
@@ -125,12 +119,15 @@ export default function Layout() {
           <IconButton color="inherit" edge="start" onClick={() => setMobileOpen(!mobileOpen)} sx={{ mr: 2, display: { md: 'none' } }}>
             <MenuIcon />
           </IconButton>
-          <Typography variant="h6" noWrap sx={{ flexGrow: 1, fontWeight: 700, fontSize: '1.05rem' }}>
-            <Box component="span" sx={{ background: 'linear-gradient(135deg, #6C63FF 0%, #45B7D1 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-              Wollaston's
-            </Box>
-            <Box component="span" sx={{ color: '#9B9BB4', fontWeight: 400, ml: 1 }}>Shift Scheduler</Box>
-          </Typography>
+          <Stack direction="row" alignItems="center" gap={1} sx={{ flexGrow: 1 }}>
+            <Box
+              component="img"
+              src={wollysLogo}
+              alt="Wollaston's"
+              sx={{ height: 32, width: 'auto', filter: 'drop-shadow(0 2px 8px rgba(108, 99, 255, 0.3))' }}
+            />
+            <Box component="span" sx={{ color: '#9B9BB4', fontWeight: 400, fontSize: '1.05rem' }}>Shift Scheduler</Box>
+          </Stack>
           <Chip
             size="small"
             label="v2.0"

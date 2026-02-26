@@ -73,22 +73,4 @@ export const downloadPDF = (weekStart) =>
 export const getOrderDays = () => api.get('/order-days');
 export const updateOrderDays = (ag, us) => api.put('/order-days', { ag, us });
 
-// Registration - Admin (JWT-protected)
-export const getInviteToken = () => api.get('/registration/token');
-export const generateInviteToken = () => api.post('/registration/generate-token');
-export const deactivateInviteToken = () => api.delete('/registration/token');
-
-// Registration - Public (no JWT, uses plain axios)
-const publicApi = axios.create({ baseURL: '/api' });
-export const validateInviteToken = (token) =>
-  publicApi.get(`/registration/validate/${token}`);
-export const registerEmployee = (data) =>
-  publicApi.post('/registration/register', data);
-export const getEmployeeByEditToken = (editToken) =>
-  publicApi.get(`/registration/employee/${editToken}`);
-export const updateEmployeeByEditToken = (editToken, data) =>
-  publicApi.put(`/registration/employee/${editToken}`, data);
-export const updateUnavailableByEditToken = (editToken, blocks) =>
-  publicApi.put(`/registration/employee/${editToken}/unavailable-times`, { blocks });
-
 export default api;

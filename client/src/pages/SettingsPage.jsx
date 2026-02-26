@@ -4,7 +4,7 @@ import {
   TableHead, TableRow, TextField, Button, Stack, Alert, Divider,
   Checkbox,
 } from '@mui/material';
-import { Add, Remove, RestartAlt, Save, Link as LinkIcon, ContentCopy, CheckCircle, LinkOff } from '@mui/icons-material';
+import { Add, Remove, RestartAlt, Save } from '@mui/icons-material';
 import * as api from '../services/api';
 
 const PERIODS = ['morning', 'afternoon', 'night'];
@@ -36,11 +36,6 @@ export default function SettingsPage() {
   const [error, setError] = useState('');
   const [orderDays, setOrderDays] = useState({ ag: [], us: [] });
   const [orderDaysDirty, setOrderDaysDirty] = useState(false);
-  const [inviteToken, setInviteToken] = useState(null);
-  const [inviteUrl, setInviteUrl] = useState('');
-  const [inviteCopied, setInviteCopied] = useState(false);
-  const [inviteLoading, setInviteLoading] = useState(false);
-
   const loadConfigs = async () => {
     try {
       const res = await api.getShiftConfigs();
@@ -61,49 +56,7 @@ export default function SettingsPage() {
     }
   };
 
-  const loadInviteToken = async () => {
-    try {
-      const res = await api.getInviteToken();
-      setInviteToken(res.data.token);
-      setInviteUrl(res.data.url || '');
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const handleGenerateInvite = async () => {
-    setInviteLoading(true);
-    try {
-      const res = await api.generateInviteToken();
-      setInviteToken(res.data.token);
-      setInviteUrl(res.data.url);
-      setSuccess('Registration link generated!');
-    } catch (err) {
-      setError('Failed to generate link');
-    } finally {
-      setInviteLoading(false);
-    }
-  };
-
-  const handleDeactivateInvite = async () => {
-    if (!confirm('Deactivate the registration link? Employees won\'t be able to register until you generate a new one.')) return;
-    try {
-      await api.deactivateInviteToken();
-      setInviteToken(null);
-      setInviteUrl('');
-      setSuccess('Registration link deactivated');
-    } catch (err) {
-      setError('Failed to deactivate link');
-    }
-  };
-
-  const copyInviteLink = () => {
-    navigator.clipboard.writeText(inviteUrl);
-    setInviteCopied(true);
-    setTimeout(() => setInviteCopied(false), 2000);
-  };
-
-  useEffect(() => { loadConfigs(); loadOrderDays(); loadInviteToken(); }, []);
+  useEffect(() => { loadConfigs(); loadOrderDays(); }, []);
 
   const getPeriodsSlots = (period) =>
     configs.filter(c => c.shift_period === period).sort((a, b) => a.slot_index - b.slot_index);
@@ -316,72 +269,6 @@ export default function SettingsPage() {
             </TableBody>
           </Table>
         </TableContainer>
-      </Paper>
-
-      {/* Employee Registration Link */}
-      <Paper sx={{ mb: 3, p: 2 }}>
-        <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1}>
-          <Typography variant="h6">
-            <LinkIcon sx={{ mr: 1, verticalAlign: 'middle', color: '#6C63FF' }} />
-            Employee Registration Link
-          </Typography>
-        </Stack>
-        <Divider sx={{ mb: 2 }} />
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Generate a shareable link for employees to register themselves and set their class schedules.
-          After registering, each employee gets their own personal link to update their availability.
-        </Typography>
-
-        {inviteToken ? (
-          <Box>
-            <Box sx={{
-              p: 1.5, borderRadius: 2, mb: 2,
-              bgcolor: 'rgba(15, 15, 26, 0.6)',
-              border: '1px solid rgba(108, 99, 255, 0.15)',
-              wordBreak: 'break-all',
-            }}>
-              <Typography variant="body2" sx={{ color: '#8B83FF', fontFamily: '"JetBrains Mono", monospace', fontSize: '0.75rem' }}>
-                {inviteUrl}
-              </Typography>
-            </Box>
-            <Stack direction="row" gap={1} flexWrap="wrap">
-              <Button
-                variant="contained" size="small"
-                startIcon={inviteCopied ? <CheckCircle /> : <ContentCopy />}
-                onClick={copyInviteLink}
-                sx={{
-                  background: inviteCopied
-                    ? 'linear-gradient(135deg, #2ED573, #45B7D1)'
-                    : 'linear-gradient(135deg, #6C63FF, #8B83FF)',
-                }}
-              >
-                {inviteCopied ? 'Copied!' : 'Copy Link'}
-              </Button>
-              <Button variant="outlined" size="small" startIcon={<LinkIcon />}
-                onClick={handleGenerateInvite} disabled={inviteLoading}
-              >
-                Regenerate
-              </Button>
-              <Button variant="outlined" size="small" startIcon={<LinkOff />}
-                onClick={handleDeactivateInvite}
-                sx={{ borderColor: 'rgba(255, 107, 107, 0.3)', color: '#FF6B6B', '&:hover': { borderColor: 'rgba(255, 107, 107, 0.5)', bgcolor: 'rgba(255, 107, 107, 0.08)' } }}
-              >
-                Deactivate
-              </Button>
-            </Stack>
-          </Box>
-        ) : (
-          <Button
-            variant="contained" startIcon={<LinkIcon />}
-            onClick={handleGenerateInvite} disabled={inviteLoading}
-            sx={{
-              background: 'linear-gradient(135deg, #6C63FF, #8B83FF)',
-              '&:hover': { background: 'linear-gradient(135deg, #5A52E0, #7A72F0)' },
-            }}
-          >
-            {inviteLoading ? 'Generating...' : 'Generate Registration Link'}
-          </Button>
-        )}
       </Paper>
 
       <Paper sx={{ p: 2 }}>
