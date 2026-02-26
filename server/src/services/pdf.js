@@ -3,30 +3,29 @@ const path = require('path');
 const fs = require('fs');
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const PERIODS = ['morning', 'afternoon', 'night'];
-const PERIOD_LABELS = { morning: 'Morning', afternoon: 'Afternoon', night: 'Night' };
 
-// Dark theme colors matching the app
+// Light theme colors - clean and professional
 const COLORS = {
-  darkBg: '#0F0F1A',
-  cardBg: '#1A1A2E',
   headerBg: '#6C63FF',        // primary purple
   headerText: '#FFFFFF',
-  dayHeaderBg: '#2A2A4A',     // dark purple-gray
-  dayHeaderText: '#E8E8F0',
-  morningBg: '#1E1E38',       // subtle warm tint
-  afternoonBg: '#1A1A32',     // subtle cool tint
-  nightBg: '#16162C',         // darkest tint
-  cellText: '#E8E8F0',        // light text
-  timeText: '#9B9BB4',        // muted text
-  traineeColor: '#2ED573',    // green for trainees
-  managerColor: '#FF6B6B',    // red for managers
-  borderColor: '#3A3A5C',     // subtle border
-  accentPurple: '#8B83FF',
-  accentCyan: '#45B7D1',
-  summaryAltBg: '#22223A',
-  emptySlot: '#6B6B80',
+  dayHeaderBg: '#F0EEFF',     // very light purple
+  dayHeaderText: '#3A3078',   // dark purple text
+  colHeaderBg: '#F8F8FC',     // near-white purple tint
+  colHeaderText: '#6C63FF',   // purple text
+  cellText: '#2D2D3F',        // dark text
+  timeText: '#7A7A9B',        // muted gray
+  traineeColor: '#16A34A',    // green for trainees
+  managerColor: '#DC2626',    // red for managers
+  borderColor: '#E0E0EA',     // light gray border
+  altRowBg: '#FAFAFD',        // very subtle alternating bg
+  whiteBg: '#FFFFFF',
+  emptySlot: '#B0B0C8',       // muted for empty
+  accentPurple: '#6C63FF',
+  orderTagColor: '#D97706',   // amber for order tags
+  summaryAltBg: '#F5F5FA',
+  totalRowBg: '#EDE9FE',      // light violet for totals
+  totalRowText: '#4C1D95',    // deep purple
 };
 
 function formatTime(time24) {
@@ -137,25 +136,25 @@ async function generatePDF(weekStart) {
 
   // ===== PAGE 1: Sunday - Wednesday =====
   content.push(buildHeader(logoBase64, weekStart));
-  content.push({ text: '', margin: [0, 8] });
+  content.push({ text: '', margin: [0, 6] });
   for (let day = 0; day <= 3; day++) {
     content.push(buildDayTable(day, weekStart, scheduleData, shiftConfigs, orderDaysMap));
-    if (day < 3) content.push({ text: '', margin: [0, 6] });
+    if (day < 3) content.push({ text: '', margin: [0, 5] });
   }
 
   // ===== PAGE 2: Thursday - Saturday =====
   content.push({ text: '', pageBreak: 'before' });
   content.push(buildHeader(logoBase64, weekStart, true));
-  content.push({ text: '', margin: [0, 8] });
+  content.push({ text: '', margin: [0, 6] });
   for (let day = 4; day <= 6; day++) {
     content.push(buildDayTable(day, weekStart, scheduleData, shiftConfigs, orderDaysMap));
-    if (day < 6) content.push({ text: '', margin: [0, 6] });
+    if (day < 6) content.push({ text: '', margin: [0, 5] });
   }
 
   // ===== PAGE 3: Hours Summary =====
   content.push({ text: '', pageBreak: 'before' });
   content.push(buildHeader(logoBase64, weekStart, false, true));
-  content.push({ text: '', margin: [0, 10] });
+  content.push({ text: '', margin: [0, 8] });
   content.push(buildSummaryTable(employeeHours));
 
   return new Promise((resolve) => {
@@ -167,14 +166,11 @@ async function generatePDF(weekStart) {
 
     const docDefinition = {
       pageSize: 'LETTER',
-      pageOrientation: 'landscape',
+      pageOrientation: 'portrait',
       pageMargins: [25, 20, 25, 20],
-      background: function () {
-        return { canvas: [{ type: 'rect', x: 0, y: 0, w: 792, h: 612, color: COLORS.darkBg }] };
-      },
       content,
       styles: {
-        title: { fontSize: 16, bold: true, alignment: 'center', color: COLORS.headerText },
+        title: { fontSize: 16, bold: true, alignment: 'center', color: COLORS.cellText },
         subtitle: { fontSize: 10, alignment: 'center', color: COLORS.accentPurple },
       },
       defaultStyle: { font: 'Roboto', color: COLORS.cellText },
@@ -193,7 +189,7 @@ function buildHeader(logoBase64, weekStart, isContinued, isSummary) {
   if (logoBase64) {
     headerColumns.push({
       image: logoBase64,
-      width: 90,
+      width: 70,
       alignment: 'left',
     });
   }
@@ -206,9 +202,9 @@ function buildHeader(logoBase64, weekStart, isContinued, isSummary) {
     stack: [
       {
         text: isSummary ? 'Hours Summary' : 'Weekly Schedule',
-        fontSize: 18,
+        fontSize: 16,
         bold: true,
-        color: COLORS.headerText,
+        color: COLORS.cellText,
         alignment: logoBase64 ? 'left' : 'center',
       },
       {
@@ -219,12 +215,19 @@ function buildHeader(logoBase64, weekStart, isContinued, isSummary) {
         margin: [0, 2, 0, 0],
       },
     ],
-    margin: [10, 5, 0, 0],
+    margin: [8, 8, 0, 0],
   });
 
+  // Add a purple accent line below header
   return {
-    columns: headerColumns,
-    margin: [0, 0, 0, 0],
+    stack: [
+      { columns: headerColumns },
+      {
+        canvas: [
+          { type: 'line', x1: 0, y1: 4, x2: 560, y2: 4, lineWidth: 2, lineColor: COLORS.accentPurple },
+        ],
+      },
+    ],
   };
 }
 
@@ -252,135 +255,7 @@ function buildDayTable(day, weekStart, scheduleData, shiftConfigs, orderDaysMap)
     if (slotCount > maxRows) maxRows = slotCount;
   }
 
-  const body = [];
-
-  // Day header row spanning all columns
-  body.push([
-    {
-      text: [
-        { text: `${DAY_NAMES[day]} - ${dateStr}`, bold: true, fontSize: 11, color: COLORS.headerText },
-        { text: orderStr, fontSize: 8, color: '#FFA502', italics: true },
-      ],
-      colSpan: 7,
-      fillColor: COLORS.headerBg,
-      alignment: 'center',
-      margin: [0, 4],
-    },
-    {}, {}, {}, {}, {}, {},
-  ]);
-
-  // Column headers: Time | Name | Time | Name | Time | Name | Mgr
-  body.push([
-    { text: 'Time', bold: true, fontSize: 7, color: COLORS.accentCyan, fillColor: COLORS.dayHeaderBg, alignment: 'center', margin: [0, 3] },
-    { text: 'Morning', bold: true, fontSize: 7, color: COLORS.accentCyan, fillColor: COLORS.dayHeaderBg, alignment: 'center', margin: [0, 3] },
-    { text: 'Time', bold: true, fontSize: 7, color: COLORS.accentCyan, fillColor: COLORS.dayHeaderBg, alignment: 'center', margin: [0, 3] },
-    { text: 'Afternoon', bold: true, fontSize: 7, color: COLORS.accentCyan, fillColor: COLORS.dayHeaderBg, alignment: 'center', margin: [0, 3] },
-    { text: 'Time', bold: true, fontSize: 7, color: COLORS.accentCyan, fillColor: COLORS.dayHeaderBg, alignment: 'center', margin: [0, 3] },
-    { text: 'Night', bold: true, fontSize: 7, color: COLORS.accentCyan, fillColor: COLORS.dayHeaderBg, alignment: 'center', margin: [0, 3] },
-    { text: 'Mgr', bold: true, fontSize: 7, color: COLORS.managerColor, fillColor: COLORS.dayHeaderBg, alignment: 'center', margin: [0, 3] },
-  ]);
-
-  // Data rows
-  // Collect manager names for this day
-  const dayManagers = new Set();
-
-  for (let rowIdx = 0; rowIdx < maxRows; rowIdx++) {
-    const row = [];
-    const rowBg = rowIdx % 2 === 0 ? COLORS.morningBg : COLORS.nightBg;
-
-    for (const period of PERIODS) {
-      const { entries, configs } = periodSlots[period];
-      const entry = entries.find(e => e.slot_index === rowIdx);
-      const config = configs.find(c => c.slot_index === rowIdx);
-
-      if (entry && entry.employee_name) {
-        const startTime = entry.start_time || config?.start_time;
-        const endTime = entry.end_time || config?.end_time;
-        const timeStr = `${formatTime(startTime)}-${formatTime(endTime)}`;
-        const roles = parseRoles(entry.employee_role);
-        const isMgr = hasManagerRole(roles, period);
-        const isAnyMgr = isAnyManager(roles);
-
-        if (isMgr || isAnyMgr) {
-          dayManagers.add(entry.employee_name);
-        }
-
-        // Time cell
-        row.push({
-          text: timeStr,
-          fontSize: 7,
-          color: COLORS.timeText,
-          fillColor: rowBg,
-          alignment: 'center',
-          margin: [0, 2],
-        });
-
-        // Name cell - color based on role
-        let nameColor = COLORS.cellText;
-        let nameText = entry.employee_name;
-        let isBold = false;
-        let isItalic = false;
-
-        if (entry.is_trainee) {
-          nameColor = COLORS.traineeColor;
-          nameText = `${entry.employee_name} (T)`;
-          isItalic = true;
-        } else if (isMgr) {
-          nameColor = COLORS.managerColor;
-          isBold = true;
-        }
-
-        row.push({
-          text: nameText,
-          fontSize: 8,
-          color: nameColor,
-          bold: isBold,
-          italics: isItalic,
-          fillColor: rowBg,
-          margin: [2, 2],
-        });
-      } else {
-        // Empty slot
-        const timeStr = config ? `${formatTime(config.start_time)}-${formatTime(config.end_time)}` : '';
-        row.push({
-          text: timeStr || '',
-          fontSize: 7,
-          color: COLORS.emptySlot,
-          fillColor: rowBg,
-          alignment: 'center',
-          margin: [0, 2],
-        });
-        row.push({
-          text: '—',
-          fontSize: 8,
-          color: COLORS.emptySlot,
-          fillColor: rowBg,
-          margin: [2, 2],
-        });
-      }
-    }
-
-    // Mgr column - only show on first row
-    if (rowIdx === 0) {
-      row.push({
-        text: dayManagers.size > 0 ? '' : '',
-        fontSize: 7,
-        color: COLORS.managerColor,
-        fillColor: rowBg,
-        alignment: 'center',
-        margin: [0, 2],
-        rowSpan: maxRows,
-      });
-    } else {
-      row.push({});
-    }
-
-    body.push(row);
-  }
-
-  // After building rows, fill in the Mgr cell content with actual managers found
-  // We need to collect all managers first, then update the cell
-  // Rebuild: collect managers from all entries for this day
+  // Collect managers for this day upfront
   const allDayManagers = [];
   for (const period of PERIODS) {
     const key = `${day}-${period}`;
@@ -397,29 +272,141 @@ function buildDayTable(day, weekStart, scheduleData, shiftConfigs, orderDaysMap)
     }
   }
 
-  // Update the Mgr cell in the first data row (index 2 = after header + column headers)
-  if (body.length > 2) {
-    const mgrCell = body[2][6]; // First data row, last column
-    if (mgrCell && typeof mgrCell === 'object') {
-      mgrCell.text = allDayManagers.length > 0
-        ? allDayManagers.map(n => n.split(' ')[0]).join('\n')
-        : '—';
+  const body = [];
+
+  // Day header row spanning all columns
+  body.push([
+    {
+      text: [
+        { text: `${DAY_NAMES[day]} - ${dateStr}`, bold: true, fontSize: 10, color: COLORS.headerText },
+        { text: orderStr, fontSize: 7, color: '#FFD700', italics: true },
+      ],
+      colSpan: 7,
+      fillColor: COLORS.headerBg,
+      alignment: 'center',
+      margin: [0, 3],
+    },
+    {}, {}, {}, {}, {}, {},
+  ]);
+
+  // Column headers: Time | Morning | Time | Afternoon | Time | Night | Mgr
+  body.push([
+    { text: 'Time', bold: true, fontSize: 6.5, color: COLORS.colHeaderText, fillColor: COLORS.colHeaderBg, alignment: 'center', margin: [0, 2] },
+    { text: 'Morning', bold: true, fontSize: 6.5, color: COLORS.colHeaderText, fillColor: COLORS.colHeaderBg, alignment: 'center', margin: [0, 2] },
+    { text: 'Time', bold: true, fontSize: 6.5, color: COLORS.colHeaderText, fillColor: COLORS.colHeaderBg, alignment: 'center', margin: [0, 2] },
+    { text: 'Afternoon', bold: true, fontSize: 6.5, color: COLORS.colHeaderText, fillColor: COLORS.colHeaderBg, alignment: 'center', margin: [0, 2] },
+    { text: 'Time', bold: true, fontSize: 6.5, color: COLORS.colHeaderText, fillColor: COLORS.colHeaderBg, alignment: 'center', margin: [0, 2] },
+    { text: 'Night', bold: true, fontSize: 6.5, color: COLORS.colHeaderText, fillColor: COLORS.colHeaderBg, alignment: 'center', margin: [0, 2] },
+    { text: 'Mgr', bold: true, fontSize: 6.5, color: COLORS.managerColor, fillColor: COLORS.colHeaderBg, alignment: 'center', margin: [0, 2] },
+  ]);
+
+  // Data rows
+  for (let rowIdx = 0; rowIdx < maxRows; rowIdx++) {
+    const row = [];
+    const rowBg = rowIdx % 2 === 0 ? COLORS.whiteBg : COLORS.altRowBg;
+
+    for (const period of PERIODS) {
+      const { entries, configs } = periodSlots[period];
+      const entry = entries.find(e => e.slot_index === rowIdx);
+      const config = configs.find(c => c.slot_index === rowIdx);
+
+      if (entry && entry.employee_name) {
+        const startTime = entry.start_time || config?.start_time;
+        const endTime = entry.end_time || config?.end_time;
+        const timeStr = `${formatTime(startTime)}-${formatTime(endTime)}`;
+        const roles = parseRoles(entry.employee_role);
+        const isMgr = hasManagerRole(roles, period);
+
+        // Time cell
+        row.push({
+          text: timeStr,
+          fontSize: 6,
+          color: COLORS.timeText,
+          fillColor: rowBg,
+          alignment: 'center',
+          margin: [0, 2],
+        });
+
+        // Name cell
+        let nameColor = COLORS.cellText;
+        let nameText = entry.employee_name;
+        let isBold = false;
+        let isItalic = false;
+
+        if (entry.is_trainee) {
+          nameColor = COLORS.traineeColor;
+          nameText = `${entry.employee_name} (T)`;
+          isItalic = true;
+        } else if (isMgr) {
+          nameColor = COLORS.managerColor;
+          isBold = true;
+        }
+
+        row.push({
+          text: nameText,
+          fontSize: 7.5,
+          color: nameColor,
+          bold: isBold,
+          italics: isItalic,
+          fillColor: rowBg,
+          margin: [2, 2],
+        });
+      } else {
+        // Empty slot
+        const timeStr = config ? `${formatTime(config.start_time)}-${formatTime(config.end_time)}` : '';
+        row.push({
+          text: timeStr || '',
+          fontSize: 6,
+          color: COLORS.emptySlot,
+          fillColor: rowBg,
+          alignment: 'center',
+          margin: [0, 2],
+        });
+        row.push({
+          text: '—',
+          fontSize: 7.5,
+          color: COLORS.emptySlot,
+          fillColor: rowBg,
+          alignment: 'center',
+          margin: [2, 2],
+        });
+      }
     }
+
+    // Mgr column
+    if (rowIdx === 0) {
+      row.push({
+        text: allDayManagers.length > 0
+          ? allDayManagers.map(n => n.split(' ')[0]).join('\n')
+          : '—',
+        fontSize: 6.5,
+        color: allDayManagers.length > 0 ? COLORS.managerColor : COLORS.emptySlot,
+        bold: allDayManagers.length > 0,
+        fillColor: rowBg,
+        alignment: 'center',
+        margin: [0, 2],
+        rowSpan: maxRows,
+      });
+    } else {
+      row.push({});
+    }
+
+    body.push(row);
   }
 
   return {
     table: {
       headerRows: 2,
-      widths: [55, '*', 55, '*', 55, '*', 40],
+      widths: [48, '*', 48, '*', 48, '*', 32],
       body,
     },
     layout: {
-      hLineWidth: (i, node) => (i <= 2 ? 1 : 0.5),
-      vLineWidth: () => 0.5,
+      hLineWidth: (i) => (i <= 2 ? 0.8 : 0.4),
+      vLineWidth: () => 0.4,
       hLineColor: () => COLORS.borderColor,
       vLineColor: () => COLORS.borderColor,
-      paddingLeft: () => 3,
-      paddingRight: () => 3,
+      paddingLeft: () => 2,
+      paddingRight: () => 2,
       paddingTop: () => 1,
       paddingBottom: () => 1,
     },
@@ -429,10 +416,10 @@ function buildDayTable(day, weekStart, scheduleData, shiftConfigs, orderDaysMap)
 function buildSummaryTable(employeeHours) {
   const body = [
     [
-      { text: 'Employee', bold: true, fontSize: 10, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [4, 6], alignment: 'left' },
-      { text: 'Type', bold: true, fontSize: 10, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [4, 6], alignment: 'center' },
-      { text: 'Roles', bold: true, fontSize: 10, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [4, 6], alignment: 'center' },
-      { text: 'Hours', bold: true, fontSize: 10, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [4, 6], alignment: 'center' },
+      { text: 'Employee', bold: true, fontSize: 9, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [4, 5], alignment: 'left' },
+      { text: 'Type', bold: true, fontSize: 9, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [4, 5], alignment: 'center' },
+      { text: 'Roles', bold: true, fontSize: 9, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [4, 5], alignment: 'center' },
+      { text: 'Hours', bold: true, fontSize: 9, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [4, 5], alignment: 'center' },
     ],
   ];
 
@@ -440,7 +427,7 @@ function buildSummaryTable(employeeHours) {
 
   for (let i = 0; i < sorted.length; i++) {
     const emp = sorted[i];
-    const rowBg = i % 2 === 0 ? COLORS.cardBg : COLORS.summaryAltBg;
+    const rowBg = i % 2 === 0 ? COLORS.whiteBg : COLORS.summaryAltBg;
     const isMgr = isAnyManager(emp.roles || []);
 
     // Format roles
@@ -473,7 +460,7 @@ function buildSummaryTable(employeeHours) {
     body.push([
       {
         text: emp.name + nameExtra,
-        fontSize: 10,
+        fontSize: 9,
         color: nameColor,
         bold: isMgr,
         italics: emp.is_trainee,
@@ -482,7 +469,7 @@ function buildSummaryTable(employeeHours) {
       },
       {
         text: empTypeLabel,
-        fontSize: 9,
+        fontSize: 8,
         color: COLORS.timeText,
         fillColor: rowBg,
         alignment: 'center',
@@ -490,7 +477,7 @@ function buildSummaryTable(employeeHours) {
       },
       {
         text: roleLabels.join(', ') || '—',
-        fontSize: 8,
+        fontSize: 7.5,
         color: roleLabels.length > 0 ? COLORS.accentPurple : COLORS.emptySlot,
         fillColor: rowBg,
         alignment: 'center',
@@ -500,7 +487,7 @@ function buildSummaryTable(employeeHours) {
         text: emp.hours.toFixed(1) + 'h',
         fontSize: 10,
         bold: true,
-        color: COLORS.accentCyan,
+        color: COLORS.accentPurple,
         fillColor: rowBg,
         alignment: 'center',
         margin: [4, 4],
@@ -511,20 +498,20 @@ function buildSummaryTable(employeeHours) {
   // Total row
   const totalHours = sorted.reduce((sum, emp) => sum + emp.hours, 0);
   body.push([
-    { text: `Total (${sorted.length} employees)`, bold: true, fontSize: 10, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [4, 6], colSpan: 3 },
+    { text: `Total (${sorted.length} employees)`, bold: true, fontSize: 10, color: COLORS.totalRowText, fillColor: COLORS.totalRowBg, margin: [4, 6], colSpan: 3 },
     {}, {},
-    { text: totalHours.toFixed(1) + 'h', bold: true, fontSize: 11, color: COLORS.headerText, fillColor: COLORS.headerBg, alignment: 'center', margin: [4, 6] },
+    { text: totalHours.toFixed(1) + 'h', bold: true, fontSize: 11, color: COLORS.totalRowText, fillColor: COLORS.totalRowBg, alignment: 'center', margin: [4, 6] },
   ]);
 
   return {
     table: {
       headerRows: 1,
-      widths: ['*', 80, 120, 60],
+      widths: ['*', 70, 100, 50],
       body,
     },
     layout: {
-      hLineWidth: (i) => (i <= 1 ? 1.5 : 0.5),
-      vLineWidth: () => 0.5,
+      hLineWidth: (i) => (i <= 1 ? 1 : 0.4),
+      vLineWidth: () => 0.4,
       hLineColor: () => COLORS.borderColor,
       vLineColor: () => COLORS.borderColor,
       paddingLeft: () => 2,
