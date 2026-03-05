@@ -1,12 +1,16 @@
 const db = require('../db/knex');
 
+// ═══════════════════════════════════════════════════════════════
+// Utility functions
+// ═══════════════════════════════════════════════════════════════
+
 function calcHours(startTime, endTime) {
   if (!startTime || !endTime) return 7;
   const [sh, sm] = startTime.split(':').map(Number);
   const [eh, em] = endTime.split(':').map(Number);
   let startMin = sh * 60 + sm;
   let endMin = eh * 60 + em;
-  if (endMin <= startMin) endMin += 24 * 60; // overnight shift
+  if (endMin <= startMin) endMin += 24 * 60;
   return (endMin - startMin) / 60;
 }
 
@@ -15,632 +19,333 @@ function toMinutes(time) {
   return h * 60 + m;
 }
 
-// Check if a shift slot [shiftStart, shiftEnd] overlaps with an unavailable block [blockStart, blockEnd]
 function timesOverlap(shiftStart, shiftEnd, blockStart, blockEnd) {
   let ss = toMinutes(shiftStart);
   let se = toMinutes(shiftEnd);
   let bs = toMinutes(blockStart);
   let be = toMinutes(blockEnd);
-
-  // Handle overnight shifts (end < start means crosses midnight)
   if (se <= ss) se += 24 * 60;
   if (be <= bs) be += 24 * 60;
-
-  // Two ranges overlap if one starts before the other ends, and vice versa
   return ss < be && bs < se;
 }
 
-// Manager roles are restricted to specific opening times
 const MANAGER_START_TIMES = {
   morning: ['06:00'],
   afternoon: ['11:00', '13:00'],
   night: ['18:00'],
 };
 
-// Minimum morning start time (10:00) if employee worked night shift previous day
 const MIN_MORNING_AFTER_NIGHT = '10:00';
 
-// Check if employee worked night shift on previous day (from assignments list)
-function workedNightPreviousDay(empId, day, allAssignments, existingLocked) {
-  const prevDay = day - 1; // Sunday=0, so prevDay=-1 means Saturday of previous week (skip)
+function workedNightPreviousDay(empId, day, assignments, lockedEntries) {
+  const prevDay = day - 1;
   if (prevDay < 0) return false;
-  const allEntries = [...(allAssignments || []), ...(existingLocked || [])];
-  return allEntries.some(a => a.employee_id === empId && a.day_of_week === prevDay && a.shift_period === 'night');
+  const all = [...(assignments || []), ...(lockedEntries || [])];
+  return all.some(a => a.employee_id === empId && a.day_of_week === prevDay && a.shift_period === 'night');
+}
+
+function isEmployeeAvailable(emp, unavailMap, oldAvailMap, day, shiftStart, shiftEnd, period) {
+  const empUnavail = unavailMap[emp.id];
+  if (empUnavail && empUnavail.length > 0) {
+    const dayBlocks = empUnavail.filter(u => u.day_of_week === day);
+    for (const block of dayBlocks) {
+      if (timesOverlap(shiftStart, shiftEnd, block.start_time, block.end_time)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (oldAvailMap[emp.id]) {
+    return oldAvailMap[emp.id][`${day}-${period}`] !== false;
+  }
+  return true;
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Phase 0 helpers: Pre-computation
+// Build all slots for the week (flat list)
 // ═══════════════════════════════════════════════════════════════
 
-function buildDaySlots(shiftConfigs, settingsMap, slotCounts, existingLocked) {
-  const daySlots = [];
+function buildAllSlots(shiftConfigs, settingsMap, slotCounts, lockedEntries) {
+  const slots = [];
   for (let day = 0; day < 7; day++) {
-    const slots = [];
     for (const period of ['morning', 'afternoon', 'night']) {
       const slotsNeeded = settingsMap[`${day}-${period}`] || slotCounts[period];
       const periodConfigs = shiftConfigs.filter(c => c.shift_period === period);
 
       for (let slotIdx = 0; slotIdx < slotsNeeded; slotIdx++) {
         const config = periodConfigs[slotIdx] || periodConfigs[periodConfigs.length - 1];
-        const shiftHours = calcHours(config.start_time, config.end_time);
-        // Only slot 0 for afternoon/night is the designated manager slot
-        // Morning slot 0 stays open for food order employees
+        const hours = calcHours(config.start_time, config.end_time);
         const isManagerSlot = slotIdx === 0 && period !== 'morning';
 
-        const lockedEntry = existingLocked.find(
+        const lockedEntry = lockedEntries.find(
           e => e.day_of_week === day && e.shift_period === period && e.slot_index === slotIdx
         );
 
         slots.push({
+          day,
           period,
           slotIdx,
-          config,
-          shiftHours,
+          startTime: config.start_time,
+          endTime: config.end_time,
+          hours,
           isManagerSlot,
           isLocked: !!lockedEntry,
           lockedEmployeeId: lockedEntry ? lockedEntry.employee_id : null,
         });
       }
     }
-    daySlots.push(slots);
   }
-  return daySlots;
-}
-
-// Check if an employee can work a specific slot
-// Rules: slot 0 = manager slot (prefer managers there), slots 1+ = open to anyone
-// Managers can work ANY slot in their period, non-managers can work any slot
-// In strict mode: non-managers blocked from slot 0, managers restricted to their period
-// In relaxed mode: anyone can fill any slot
-function canEmployeeWorkSlot(emp, slot, relaxManager) {
-  // Trainees cannot work 6 AM morning shifts
-  if (emp.is_trainee && slot.period === 'morning' && slot.config.start_time === '06:00') return false;
-
-  const hasAnyManagerRole = emp.roles.some(r => r.endsWith('_manager'));
-
-  if (relaxManager) {
-    // Relaxed: managers can work any slot in their period, non-managers can fill anything
-    if (!hasAnyManagerRole) return true;
-    // Managers: allow any slot in their manager period
-    return emp.roles.some(r => {
-      if (!r.endsWith('_manager')) return false;
-      return r.replace('_manager', '') === slot.period;
-    });
-  }
-
-  // Strict mode
-  if (!hasAnyManagerRole) {
-    // Non-managers can work any slot EXCEPT slot 0 (manager slot)
-    if (slot.isManagerSlot) return false;
-    // Non-managers blocked from 6 AM morning slots (morning managers only)
-    if (slot.period === 'morning' && slot.config.start_time === '06:00') return false;
-    return true;
-  }
-
-  // Managers can work ANY slot in their manager period
-  return emp.roles.some(r => {
-    if (!r.endsWith('_manager')) return false;
-    return r.replace('_manager', '') === slot.period;
-  });
-}
-
-// Build eligibility: for each employee, for each day, which slots can they fill?
-function buildEligibilityMatrix(employees, daySlots, unavailMap, oldAvailMap) {
-  const eligibility = {};
-  for (const emp of employees) {
-    eligibility[emp.id] = {};
-    for (let day = 0; day < 7; day++) {
-      // External coop: weekends only, target night shifts
-      if (emp.employment_type === 'external_coop' && day !== 0 && day !== 6) {
-        eligibility[emp.id][day] = { eligible: false, slots: [], minHours: Infinity, maxHours: 0, durations: new Set() };
-        continue;
-      }
-
-      const availableSlots = [];
-      for (const slot of daySlots[day]) {
-        if (slot.isLocked) continue;
-        if (!isEmployeeAvailable(emp, unavailMap, oldAvailMap, day, slot.config.start_time, slot.config.end_time, slot.period)) continue;
-        if (!canEmployeeWorkSlot(emp, slot, false)) continue;
-        availableSlots.push(slot);
-      }
-
-      // Also check relaxed manager slots (for backfill eligibility tracking)
-      const relaxedSlots = [];
-      for (const slot of daySlots[day]) {
-        if (slot.isLocked) continue;
-        if (!isEmployeeAvailable(emp, unavailMap, oldAvailMap, day, slot.config.start_time, slot.config.end_time, slot.period)) continue;
-        if (!canEmployeeWorkSlot(emp, slot, true)) continue;
-        relaxedSlots.push(slot);
-      }
-
-      const allSlots = relaxedSlots.length > 0 ? relaxedSlots : availableSlots;
-      const durations = new Set(allSlots.map(s => s.shiftHours));
-
-      const avgHours = allSlots.length > 0
-        ? allSlots.reduce((sum, s) => sum + s.shiftHours, 0) / allSlots.length
-        : 0;
-
-      eligibility[emp.id][day] = {
-        eligible: allSlots.length > 0,
-        slots: availableSlots,
-        relaxedSlots,
-        minHours: allSlots.length > 0 ? Math.min(...allSlots.map(s => s.shiftHours)) : Infinity,
-        maxHours: allSlots.length > 0 ? Math.max(...allSlots.map(s => s.shiftHours)) : 0,
-        avgHours,
-        durations,
-      };
-    }
-  }
-  return eligibility;
+  return slots;
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Phase 1B: Day-level allocation with backtracking
+// Eligibility check (hard constraints only)
 // ═══════════════════════════════════════════════════════════════
 
-function countEligibleForDay(day, employees, eligibility, daysAssigned, hoursUsed, shiftsAssigned) {
-  let count = 0;
-  for (const emp of employees) {
-    if (daysAssigned[emp.id].has(day)) continue;
-    if (!eligibility[emp.id][day].eligible) continue;
-    // Use minHours for eligibility check (conservative: if they can fit the smallest shift, they're eligible)
-    if (hoursUsed[emp.id] + eligibility[emp.id][day].minHours > emp.max_hours) continue;
-    if (emp.employment_type === 'external_coop') {
-      if (day !== 0 && day !== 6) continue;
-      if (shiftsAssigned[emp.id] >= 2) continue;
-    }
-    count++;
-  }
-  return count;
-}
+function isEligible(emp, slot, tracking, ctx, relaxed = false) {
+  // One shift per day
+  if (tracking.daysAssigned[emp.id].has(slot.day)) return false;
 
-function getRankedCandidatesForDay(day, employees, eligibility, daysAssigned, hoursUsed, shiftsAssigned, daySlots, orderDaysMap) {
-  const candidates = [];
+  // Hours limit
+  const maxAllowed = emp.max_hours + (relaxed ? ctx.overflowHours : 0);
+  if (tracking.hoursUsed[emp.id] + slot.hours > maxAllowed) return false;
 
-  // Calculate global stats for fairness
-  const globalMaxShifts = Math.max(...employees.map(e => shiftsAssigned[e.id] || 0), 1);
-
-  for (const emp of employees) {
-    if (daysAssigned[emp.id].has(day)) continue;
-    if (!eligibility[emp.id][day].eligible) continue;
-    const tentH = eligibility[emp.id][day].minHours;
-    if (hoursUsed[emp.id] + tentH > emp.max_hours) continue;
-    if (emp.employment_type === 'external_coop') {
-      if (day !== 0 && day !== 6) continue;
-      if (shiftsAssigned[emp.id] >= 2) continue;
-    }
-
-    // Score for day-level allocation
-    let score = 0;
-
-    // ═══ FAIRNESS: Utilization-based priority (DOMINANT FACTOR) ═══
-    // Employees who have used less of their capacity get MUCH higher priority
-    // This ensures equal distribution proportional to max_hours
-    const utilization = hoursUsed[emp.id] / emp.max_hours; // 0.0 = unused, 1.0 = fully used
-    score += (1 - utilization) * 1000; // 0-1000 points based on remaining capacity ratio
-
-    // ═══ FAIRNESS: Strong bonus for employees with ZERO shifts ═══
-    // Ensures everyone gets at least 1 shift before anyone gets many
-    if (shiftsAssigned[emp.id] === 0) score += 800;
-    else if (shiftsAssigned[emp.id] === 1) score += 400;
-    else if (shiftsAssigned[emp.id] === 2) score += 100;
-
-    // ═══ FAIRNESS: Penalize employees who already have proportionally more shifts ═══
-    // Compare shifts assigned vs what's proportional to their max_hours
-    const proportionalTarget = emp.max_hours / 7; // rough target shifts (hours per shift ~7h)
-    if (shiftsAssigned[emp.id] > proportionalTarget) score -= 300;
-
-    // Scarcity: employees with fewer remaining eligible days get priority
-    let eligibleDayCount = 0;
-    for (let d = 0; d < 7; d++) {
-      if (daysAssigned[emp.id].has(d)) continue;
-      if (!eligibility[emp.id][d].eligible) continue;
-      if (hoursUsed[emp.id] + eligibility[emp.id][d].minHours > emp.max_hours) continue;
-      if (emp.employment_type === 'external_coop' && d !== 0 && d !== 6) continue;
-      eligibleDayCount++;
-    }
-    if (eligibleDayCount > 0) {
-      score += 500 / eligibleDayCount;
-    }
-
-    // Manager eligible for a manager slot on this day
-    const hasManagerSlotOnDay = daySlots[day].some(s => s.isManagerSlot && !s.isLocked &&
-      canEmployeeWorkSlot(emp, s, false));
-    if (hasManagerSlotOnDay) score += 300;
-
-    // Food order employee on order day — must be here to place orders
-    if (orderDaysMap) {
-      const isFoodOrderEmp = emp.roles.includes('ag_food_order') || emp.roles.includes('us_food_order');
-      const isOrderDay = orderDaysMap.ag.includes(day) || orderDaysMap.us.includes(day);
-      if (isFoodOrderEmp && isOrderDay) score += 800;
-    }
-
-    // Spread: penalize employees already working many days (stronger penalties)
-    if (shiftsAssigned[emp.id] >= 5) score -= 500;
-    else if (shiftsAssigned[emp.id] >= 4) score -= 350;
-    else if (shiftsAssigned[emp.id] >= 3) score -= 200;
-
-    // Prefer employees who need this day to reach max hours
-    const remaining = emp.max_hours - hoursUsed[emp.id];
-    const remainingAfterThisDay = remaining - tentH;
-    if (remainingAfterThisDay >= 0 && remainingAfterThisDay <= 7) score += 50;
-
-    // Boost employees with few slot type options (role-constrained)
-    const totalEligibleSlotTypes = eligibility[emp.id][day].relaxedSlots
-      ? eligibility[emp.id][day].relaxedSlots.length : eligibility[emp.id][day].slots.length;
-    if (totalEligibleSlotTypes > 0 && totalEligibleSlotTypes <= 2) score += 100;
-
-    // Non-managers: if they have very few future days left, prioritize now
-    const isNonManager = !emp.roles.some(r => r.endsWith('_manager'));
-    if (isNonManager) {
-      let futureDays = 0;
-      for (let d = 0; d < 7; d++) {
-        if (d === day) continue;
-        if (daysAssigned[emp.id].has(d)) continue;
-        if (!eligibility[emp.id][d].eligible) continue;
-        if (hoursUsed[emp.id] + tentH + eligibility[emp.id][d].minHours > emp.max_hours) continue;
-        futureDays++;
-      }
-      if (futureDays <= 1) score += 100;
-    }
-
-    candidates.push({ emp, score, tentativeHours: tentH });
+  // External coop: weekends only, max 2 shifts
+  if (emp.employment_type === 'external_coop') {
+    if (slot.day !== 0 && slot.day !== 6) return false;
+    if (tracking.shiftsAssigned[emp.id] >= 2) return false;
   }
 
-  candidates.sort((a, b) => b.score - a.score);
-  return candidates;
-}
+  // Trainee: no 6AM morning
+  if (emp.is_trainee && slot.period === 'morning' && slot.startTime === '06:00') return false;
 
-function checkFeasibility(dayAllocation, slotsPerDay, employees, eligibility, daysAssigned, hoursUsed, shiftsAssigned, daySlots) {
-  for (let day = 0; day < 7; day++) {
-    const remaining = slotsPerDay[day] - dayAllocation[day].length;
-    if (remaining <= 0) continue;
-    const eligible = countEligibleForDay(day, employees, eligibility, daysAssigned, hoursUsed, shiftsAssigned);
-    if (eligible < remaining) return false;
-
-    // Structural check: morning non-manager slots can ONLY be filled by non-managers
-    if (daySlots) {
-      const allocatedIds = new Set(dayAllocation[day]);
-      const morningNonMgrSlots = daySlots[day].filter(s =>
-        s.period === 'morning' && !s.isManagerSlot && !s.isLocked
-      ).length;
-      // Count how many allocated employees are non-managers who can do morning
-      const allocatedNonMgrMorning = dayAllocation[day].filter(id => {
-        const emp = employees.find(e => e.id === id);
-        return emp && !emp.roles.some(r => r.endsWith('_manager'));
-      }).length;
-      const remainingMorningNonMgr = morningNonMgrSlots - allocatedNonMgrMorning;
-      if (remainingMorningNonMgr > 0) {
-        // Count unallocated non-managers eligible for this day
-        const availableNonMgrs = employees.filter(emp => {
-          if (allocatedIds.has(emp.id)) return false;
-          if (daysAssigned[emp.id].has(day)) return false;
-          if (emp.roles.some(r => r.endsWith('_manager'))) return false;
-          if (!eligibility[emp.id][day].eligible) return false;
-          if (hoursUsed[emp.id] + eligibility[emp.id][day].minHours > emp.max_hours) return false;
-          if (emp.employment_type === 'external_coop') {
-            if (day !== 0 && day !== 6) return false;
-            if (shiftsAssigned[emp.id] >= 2) return false;
-          }
-          return true;
-        }).length;
-        if (availableNonMgrs < remainingMorningNonMgr) return false;
-      }
+  // Manager role restrictions
+  const hasManagerRole = emp.roles.some(r => r.endsWith('_manager'));
+  if (relaxed) {
+    // Relaxed: non-managers can fill any slot, managers still period-restricted
+    if (hasManagerRole) {
+      if (!emp.roles.some(r => r.replace('_manager', '') === slot.period)) return false;
+    }
+  } else {
+    // Strict mode
+    if (hasManagerRole) {
+      if (!emp.roles.some(r => r.replace('_manager', '') === slot.period)) return false;
+    } else {
+      if (slot.isManagerSlot) return false;
+      if (slot.period === 'morning' && slot.startTime === '06:00') return false;
     }
   }
+
+  // Night-to-morning rest rule
+  if (slot.period === 'morning' && slot.startTime < MIN_MORNING_AFTER_NIGHT) {
+    if (workedNightPreviousDay(emp.id, slot.day, tracking.assignments, ctx.lockedEntries)) return false;
+  }
+
+  // Availability (NEVER relaxed)
+  if (!isEmployeeAvailable(emp, ctx.unavailMap, ctx.oldAvailMap, slot.day, slot.startTime, slot.endTime, slot.period)) {
+    return false;
+  }
+
   return true;
 }
 
-function allocateEmployeesToDays(dayAllocation, slotsPerDay, employees, daySlots, eligibility,
-  hoursUsed, shiftsAssigned, daysAssigned, orderDaysMap) {
-  const BACKTRACK_LIMIT = 500;
-  let backtracks = 0;
+// ═══════════════════════════════════════════════════════════════
+// Ideal shift count and hour bonus
+// ═══════════════════════════════════════════════════════════════
 
-  // Dynamically pick the most constrained day at each step
-  // Total slots to fill across all days
-  const totalToFill = slotsPerDay.reduce((sum, s, day) => sum + s - dayAllocation[day].length, 0);
+function getIdealShiftCount(emp) {
+  if (emp.employment_type === 'external_coop') return 2;
+  return Math.ceil(emp.max_hours / 7);
+}
 
-  for (let step = 0; step < totalToFill; step++) {
-    if (backtracks >= BACKTRACK_LIMIT) break;
+function computeIdealShiftBonus(emp, slot, tracking, standardDurations) {
+  const remaining = emp.max_hours - tracking.hoursUsed[emp.id];
+  const afterThis = remaining - slot.hours;
 
-    // Find the most constrained day dynamically
-    let bestDay = -1;
-    let bestSlack = Infinity;
-    for (let day = 0; day < 7; day++) {
-      const remaining = slotsPerDay[day] - dayAllocation[day].length;
-      if (remaining <= 0) continue;
-      const eligible = countEligibleForDay(day, employees, eligibility, daysAssigned, hoursUsed, shiftsAssigned);
-      const slack = eligible - remaining;
-      if (slack < bestSlack) {
-        bestSlack = slack;
-        bestDay = day;
-      }
-    }
+  if (afterThis < 0) return -1000;
+  if (afterThis === 0) return 200; // perfect fit
 
-    if (bestDay === -1) break; // All days filled
-
-    const day = bestDay;
-    const candidates = getRankedCandidatesForDay(day, employees, eligibility, daysAssigned, hoursUsed, shiftsAssigned, daySlots, orderDaysMap);
-
-    let assigned = false;
-    for (const candidate of candidates) {
-      const emp = candidate.emp;
-      const tentH = candidate.tentativeHours;
-
-      // Tentatively assign using average hours (more realistic than min)
-      dayAllocation[day].push(emp.id);
-      daysAssigned[emp.id].add(day);
-      hoursUsed[emp.id] += tentH;
-      shiftsAssigned[emp.id] += 1;
-
-      if (checkFeasibility(dayAllocation, slotsPerDay, employees, eligibility, daysAssigned, hoursUsed, shiftsAssigned, daySlots)) {
-        assigned = true;
-        break;
-      }
-
-      // Undo
-      dayAllocation[day].pop();
-      daysAssigned[emp.id].delete(day);
-      hoursUsed[emp.id] -= tentH;
-      shiftsAssigned[emp.id] -= 1;
-      backtracks++;
-
-      if (backtracks >= BACKTRACK_LIMIT) break;
-    }
-
-    if (!assigned) {
-      // Try without feasibility check — better to assign someone than leave empty
-      if (candidates.length > 0) {
-        const emp = candidates[0].emp;
-        const tentH = candidates[0].tentativeHours;
-        dayAllocation[day].push(emp.id);
-        daysAssigned[emp.id].add(day);
-        hoursUsed[emp.id] += tentH;
-        shiftsAssigned[emp.id] += 1;
-      }
+  // Count minimum shifts needed to cover afterThis using standard durations
+  let minShiftsNeeded = 0;
+  let hoursLeft = afterThis;
+  for (const dur of standardDurations) {
+    while (hoursLeft >= dur) {
+      hoursLeft -= dur;
+      minShiftsNeeded++;
     }
   }
+  if (hoursLeft > 0) minShiftsNeeded++;
+
+  const totalShifts = tracking.shiftsAssigned[emp.id] + 1 + minShiftsNeeded;
+  const ideal = getIdealShiftCount(emp);
+
+  if (totalShifts <= ideal) return 200;
+  if (totalShifts === ideal + 1) return 50;
+  return -100 * (totalShifts - ideal - 1);
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Phase 1C: Hour budget optimization (knapsack per employee)
+// Scoring function
 // ═══════════════════════════════════════════════════════════════
 
-function optimizeHourBudgets(dayAllocation, employees, _daySlots, eligibility) {
-  const targetHours = {};
-
-  for (const emp of employees) {
-    targetHours[emp.id] = {};
-
-    // Find which days this employee is allocated to
-    const allocatedDays = [];
-    for (let day = 0; day < 7; day++) {
-      if (dayAllocation[day].includes(emp.id)) {
-        allocatedDays.push(day);
-      }
-    }
-
-    if (allocatedDays.length === 0) continue;
-
-    // Get possible durations for each allocated day
-    const dayDurations = allocatedDays.map(day => {
-      const elig = eligibility[emp.id][day];
-      // Use relaxed slots to get all possible durations
-      const allSlots = elig.relaxedSlots && elig.relaxedSlots.length > 0 ? elig.relaxedSlots : elig.slots;
-      const durations = [...new Set(allSlots.map(s => s.shiftHours))];
-      return durations.length > 0 ? durations : [5]; // fallback
-    });
-
-    // Enumerate all combos to find best sum <= max_hours
-    const maxH = emp.max_hours;
-    let bestCombo = null;
-    let bestSum = 0;
-
-    function enumerate(idx, currentSum, currentCombo) {
-      if (idx === dayDurations.length) {
-        if (currentSum <= maxH && currentSum > bestSum) {
-          bestSum = currentSum;
-          bestCombo = [...currentCombo];
-        }
-        return;
-      }
-      for (const dur of dayDurations[idx]) {
-        if (currentSum + dur > maxH) continue;
-        currentCombo.push(dur);
-        enumerate(idx + 1, currentSum + dur, currentCombo);
-        currentCombo.pop();
-      }
-    }
-
-    enumerate(0, 0, []);
-
-    if (bestCombo) {
-      for (let i = 0; i < allocatedDays.length; i++) {
-        targetHours[emp.id][allocatedDays[i]] = bestCombo[i];
-      }
-    } else {
-      // Fallback: just use min hours for each day
-      for (const day of allocatedDays) {
-        targetHours[emp.id][day] = eligibility[emp.id][day].minHours || 5;
-      }
-    }
-  }
-
-  return targetHours;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// Phase 2: Slot assignment (within each day)
-// ═══════════════════════════════════════════════════════════════
-
-function computeSlotScore(emp, slot, day, dayAssignments, employees, lockedMap, orderDaysMap, targetHours, hoursUsed) {
+function computeScore(emp, slot, tracking, ctx) {
   let score = 0;
-  const { period, slotIdx, shiftHours, isManagerSlot } = slot;
-  const isManagerForPeriod = emp.roles.includes(`${period}_manager`);
 
-  // Locked shift bonus
-  if (lockedMap[`${emp.id}-${day}-${period}`]) score += 1000;
-
-  // Manager for manager-designated slot
-  if (isManagerSlot && isManagerForPeriod) score += 500;
-
-  // Food order employee on order day: MUST get a 6 AM slot (highest priority after locked)
+  // ═══ T1: Critical role matching (800-1200) ═══
   const isFoodOrderEmp = emp.roles.includes('ag_food_order') || emp.roles.includes('us_food_order');
-  const isOrderDay = orderDaysMap.ag.includes(day) || orderDaysMap.us.includes(day);
-  if (period === 'morning' && slot.config.start_time === '06:00' && isFoodOrderEmp && isOrderDay) {
-    score += 900;
+  const isOrderDay = ctx.orderDaysMap.ag.includes(slot.day) || ctx.orderDaysMap.us.includes(slot.day);
+  if (isFoodOrderEmp && isOrderDay && slot.period === 'morning') {
+    score += 1000;
+    if (slot.startTime === '06:00') score += 200;
   }
 
-  // Food order employees boost for any morning slot
-  if (period === 'morning' && isFoodOrderEmp) {
-    score += 400;
+  if (slot.isManagerSlot && emp.roles.includes(`${slot.period}_manager`)) {
+    score += 800;
   }
 
-  // Non-trainee bonus when none yet in this period for the day
-  const nonTraineeInShift = dayAssignments.some(
-    a => a.shift_period === period && a.employee_id &&
-      employees.find(e => e.id === a.employee_id && !e.is_trainee)
-  );
-  if (!nonTraineeInShift && !emp.is_trainee) score += 300;
+  // ═══ T2: Fairness (300-700) ═══
+  if (tracking.shiftsAssigned[emp.id] === 0) score += 700;
+  else if (tracking.shiftsAssigned[emp.id] === 1) score += 300;
 
-  // Trainee preference for 7 AM morning slot on weekdays (Mon-Fri)
-  if (period === 'morning' && slot.config.start_time === '07:00' && day >= 1 && day <= 5) {
-    if (emp.is_trainee) score += 700;
-    else score -= 200; // discourage non-trainees from taking the 7AM weekday slot
+  const utilization = tracking.hoursUsed[emp.id] / emp.max_hours;
+  score += (1 - utilization) * 500;
+
+  // Spread penalty
+  const totalEmps = ctx.employees.length;
+  const totalAssigned = ctx.employees.reduce((s, e) => s + tracking.shiftsAssigned[e.id], 0);
+  const avgShifts = totalAssigned / totalEmps;
+  if (tracking.shiftsAssigned[emp.id] >= avgShifts + 2) score -= 400;
+  else if (tracking.shiftsAssigned[emp.id] >= avgShifts + 1) score -= 200;
+
+  // ═══ T3: Shift quality (200-500) ═══
+  score += computeIdealShiftBonus(emp, slot, tracking, ctx.standardDurations);
+
+  const hoursAfter = tracking.hoursUsed[emp.id] + slot.hours;
+  if (hoursAfter === emp.max_hours) score += 300;
+  else if (emp.max_hours - hoursAfter > 0 && emp.max_hours - hoursAfter <= 1) score += 100;
+
+  // ═══ T4: Composition (200-400) ═══
+  const key = `${slot.day}-${slot.period}`;
+  const periodAssignments = tracking.dayPeriodAssignments[key] || [];
+
+  const hasNonTrainee = periodAssignments.some(a => {
+    const e = ctx.employees.find(x => x.id === a.employee_id);
+    return e && !e.is_trainee;
+  });
+  if (!hasNonTrainee && !emp.is_trainee) score += 300;
+
+  if (slot.period === 'night') {
+    const hasMale = periodAssignments.some(a => {
+      const e = ctx.employees.find(x => x.id === a.employee_id);
+      return e && e.gender === 'male';
+    });
+    if (!hasMale && emp.gender === 'male') score += 400;
   }
 
-  // Night shift: boost male employees when no male assigned yet
-  if (period === 'night') {
-    const hasMaleInNight = dayAssignments.some(
-      a => a.shift_period === 'night' && a.employee_id &&
-        employees.find(e => e.id === a.employee_id && e.gender === 'male')
-    );
-    if (!hasMaleInNight && emp.gender === 'male') score += 400;
+  if (slot.period === 'morning' && slot.startTime === '07:00' &&
+      slot.day >= 1 && slot.day <= 5 && emp.is_trainee) {
+    score += 350;
   }
 
-  // External co-ops: strongly prefer night shifts
   if (emp.employment_type === 'external_coop') {
-    if (period === 'night') score += 600;
-    else score -= 300; // discourage non-night shifts for external co-ops
+    if (slot.period === 'night') score += 500;
+    else score -= 300;
   }
 
-  // ═══ FAIRNESS: Utilization-based priority in slot assignment too ═══
-  const utilization = hoursUsed[emp.id] / emp.max_hours;
-  score += (1 - utilization) * 500; // 0-500 points: less-utilized employees preferred
-
-  // Target hours match bonus (from Phase 1C) — strong bonus to honor the knapsack plan
-  if (targetHours[emp.id] && targetHours[emp.id][day] === shiftHours) score += 400;
-  // Penalty for deviating from target hours (prevents wasting 5h slots on non-target employees)
-  if (targetHours[emp.id] && targetHours[emp.id][day] && targetHours[emp.id][day] !== shiftHours) score -= 100;
-
-  // Perfect fit bonus
-  const hoursAfter = hoursUsed[emp.id] + shiftHours;
-  if (hoursAfter === emp.max_hours) score += 150;
-
-  // Remaining capacity factor
-  score += (emp.max_hours - hoursUsed[emp.id]) / emp.max_hours * 100;
-
-  // Trainee penalty
-  if (emp.is_trainee) score -= 50;
+  // ═══ T5: Tiebreakers ═══
+  score += (emp.max_hours - tracking.hoursUsed[emp.id]) / emp.max_hours * 50;
+  if (emp.is_trainee) score -= 30;
 
   return score;
 }
 
-function assignSlotsForDay(day, allocatedEmpIds, daySlotsList, employees, hoursUsed,
-  lockedMap, orderDaysMap, targetHours, existingLocked, weekStart, unavailMap, oldAvailMap, priorAssignments, overflowHours = 0) {
-  const assignments = [];
-  const empMap = {};
-  for (const emp of employees) empMap[emp.id] = emp;
+// ═══════════════════════════════════════════════════════════════
+// Slot priority comparator (most constrained first)
+// ═══════════════════════════════════════════════════════════════
 
-  // First, add locked slots
-  for (const slot of daySlotsList) {
-    if (slot.isLocked && slot.lockedEmployeeId) {
-      assignments.push({
-        week_start_date: weekStart,
-        day_of_week: day,
-        shift_period: slot.period,
-        slot_index: slot.slotIdx,
-        employee_id: slot.lockedEmployeeId,
-        is_locked: true,
-        start_time: slot.config.start_time,
-        end_time: slot.config.end_time,
-      });
+function slotPriorityComparator(a, b) {
+  if (a.eligibleCount !== b.eligibleCount) return a.eligibleCount - b.eligibleCount;
+  if (a.isManagerSlot !== b.isManagerSlot) return (b.isManagerSlot ? 1 : 0) - (a.isManagerSlot ? 1 : 0);
+  if (a.hours !== b.hours) return b.hours - a.hours;
+  const periodOrder = { night: 0, afternoon: 1, morning: 2 };
+  if (a.period !== b.period) return periodOrder[a.period] - periodOrder[b.period];
+  return b.day - a.day;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Assignment helper
+// ═══════════════════════════════════════════════════════════════
+
+function assignToSlot(emp, slot, tracking, weekStart) {
+  const assignment = {
+    week_start_date: weekStart,
+    day_of_week: slot.day,
+    shift_period: slot.period,
+    slot_index: slot.slotIdx,
+    employee_id: emp.id,
+    is_locked: false,
+    start_time: slot.startTime,
+    end_time: slot.endTime,
+  };
+  tracking.assignments.push(assignment);
+  tracking.hoursUsed[emp.id] += slot.hours;
+  tracking.shiftsAssigned[emp.id] += 1;
+  tracking.daysAssigned[emp.id].add(slot.day);
+  tracking.dayEmployees[slot.day].add(emp.id);
+
+  const key = `${slot.day}-${slot.period}`;
+  if (!tracking.dayPeriodAssignments[key]) tracking.dayPeriodAssignments[key] = [];
+  tracking.dayPeriodAssignments[key].push(assignment);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Pre-assign food order employees
+// ═══════════════════════════════════════════════════════════════
+
+function preAssignFoodOrders(openSlots, tracking, ctx, weekStart) {
+  for (const type of ['ag', 'us']) {
+    const role = `${type}_food_order`;
+    for (const day of ctx.orderDaysMap[type]) {
+      const foodEmps = ctx.employees.filter(e => e.roles.includes(role));
+      for (const emp of foodEmps) {
+        if (tracking.daysAssigned[emp.id].has(day)) continue;
+
+        // Find best morning slot on this day
+        const morningSlots = openSlots.filter(s => s.day === day && s.period === 'morning');
+        morningSlots.sort((a, b) => {
+          if (a.startTime === '06:00' && b.startTime !== '06:00') return -1;
+          if (b.startTime === '06:00' && a.startTime !== '06:00') return 1;
+          return a.startTime.localeCompare(b.startTime);
+        });
+
+        for (const slot of morningSlots) {
+          if (isEligible(emp, slot, tracking, ctx, false)) {
+            assignToSlot(emp, slot, tracking, weekStart);
+            const idx = openSlots.indexOf(slot);
+            if (idx !== -1) openSlots.splice(idx, 1);
+            break;
+          }
+        }
+      }
     }
   }
+}
 
-  const openSlots = daySlotsList.filter(s => !s.isLocked);
-  const lockedEmpIds = new Set(daySlotsList.filter(s => s.isLocked && s.lockedEmployeeId).map(s => s.lockedEmployeeId));
-  const unassignedEmps = allocatedEmpIds.filter(id => !lockedEmpIds.has(id)).map(id => empMap[id]).filter(Boolean);
+// ═══════════════════════════════════════════════════════════════
+// Relaxed backfill for remaining empty slots
+// ═══════════════════════════════════════════════════════════════
 
-  // Build all (employee, slot) pairs with scores
-  const pairs = [];
-  for (const emp of unassignedEmps) {
-    for (const slot of openSlots) {
-      // Check if employee can work this slot
-      if (!isEmployeeAvailable(emp, unavailMap, oldAvailMap, day, slot.config.start_time, slot.config.end_time, slot.period)) continue;
-      if (!canEmployeeWorkSlot(emp, slot, false)) continue;
-      if (hoursUsed[emp.id] + slot.shiftHours > emp.max_hours) continue;
-      // Night-to-morning rest: if worked night previous day, morning must be 10:00+
-      if (slot.period === 'morning' && slot.config.start_time < MIN_MORNING_AFTER_NIGHT &&
-          workedNightPreviousDay(emp.id, day, priorAssignments, existingLocked)) continue;
+function relaxedBackfill(deferredSlots, tracking, ctx, weekStart) {
+  // Sort: shortest shifts first (easier to fit with overflow)
+  deferredSlots.sort((a, b) => a.hours - b.hours);
 
-      const score = computeSlotScore(emp, slot, day, assignments, employees, lockedMap, orderDaysMap, targetHours, hoursUsed);
-      pairs.push({ emp, slot, score });
-    }
-  }
-
-  // Greedy matching: sort by score desc, assign greedily
-  pairs.sort((a, b) => b.score - a.score);
-
-  const assignedEmps = new Set();
-  const filledSlots = new Set();
-
-  for (const { emp, slot } of pairs) {
-    if (assignedEmps.has(emp.id)) continue;
-    const slotKey = `${slot.period}-${slot.slotIdx}`;
-    if (filledSlots.has(slotKey)) continue;
-
-    assignments.push({
-      week_start_date: weekStart,
-      day_of_week: day,
-      shift_period: slot.period,
-      slot_index: slot.slotIdx,
-      employee_id: emp.id,
-      is_locked: false,
-      start_time: slot.config.start_time,
-      end_time: slot.config.end_time,
-    });
-
-    hoursUsed[emp.id] += slot.shiftHours;
-    assignedEmps.add(emp.id);
-    filledSlots.add(slotKey);
-  }
-
-  // Relaxed pass: fill any remaining open slots with relaxed manager rules
-  for (const slot of openSlots) {
-    const slotKey = `${slot.period}-${slot.slotIdx}`;
-    if (filledSlots.has(slotKey)) continue;
-
-    // Try all employees (not just allocated ones) with relaxed rules
+  for (const slot of deferredSlots) {
     let bestEmp = null;
     let bestScore = -Infinity;
 
-    for (const emp of employees) {
-      if (assignedEmps.has(emp.id)) continue;
-      // Check one-shift-per-day: not already assigned today
-      const alreadyToday = assignments.some(a => a.employee_id === emp.id);
-      if (alreadyToday) continue;
-      if (!isEmployeeAvailable(emp, unavailMap, oldAvailMap, day, slot.config.start_time, slot.config.end_time, slot.period)) continue;
-      if (!canEmployeeWorkSlot(emp, slot, true)) continue; // relaxed
-      if (hoursUsed[emp.id] + slot.shiftHours > emp.max_hours + overflowHours) continue;
-      if (emp.employment_type === 'external_coop') {
-        if (day !== 0 && day !== 6) continue;
-      }
-      // Night-to-morning rest
-      if (slot.period === 'morning' && slot.config.start_time < MIN_MORNING_AFTER_NIGHT &&
-          workedNightPreviousDay(emp.id, day, priorAssignments, existingLocked)) continue;
-
-      const score = computeSlotScore(emp, slot, day, assignments, employees, lockedMap, orderDaysMap, targetHours, hoursUsed);
+    for (const emp of ctx.employees) {
+      if (!isEligible(emp, slot, tracking, ctx, true)) continue;
+      const score = computeScore(emp, slot, tracking, ctx);
       if (score > bestScore) {
         bestScore = score;
         bestEmp = emp;
@@ -648,43 +353,120 @@ function assignSlotsForDay(day, allocatedEmpIds, daySlotsList, employees, hoursU
     }
 
     if (bestEmp) {
-      assignments.push({
-        week_start_date: weekStart,
-        day_of_week: day,
-        shift_period: slot.period,
-        slot_index: slot.slotIdx,
-        employee_id: bestEmp.id,
-        is_locked: false,
-        start_time: slot.config.start_time,
-        end_time: slot.config.end_time,
-      });
-      hoursUsed[bestEmp.id] += slot.shiftHours;
-      assignedEmps.add(bestEmp.id);
-      filledSlots.add(slotKey);
+      assignToSlot(bestEmp, slot, tracking, weekStart);
     } else {
-      // Still empty — add empty assignment
-      assignments.push({
+      // Truly unfillable — empty assignment
+      tracking.assignments.push({
         week_start_date: weekStart,
-        day_of_week: day,
+        day_of_week: slot.day,
         shift_period: slot.period,
         slot_index: slot.slotIdx,
         employee_id: null,
         is_locked: false,
-        start_time: slot.config.start_time,
-        end_time: slot.config.end_time,
+        start_time: slot.startTime,
+        end_time: slot.endTime,
       });
     }
   }
-
-  return assignments;
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Main scheduling function (two-phase algorithm)
+// Warning generation
+// ═══════════════════════════════════════════════════════════════
+
+function generateWarnings(tracking, ctx) {
+  const warnings = [];
+  const allEntries = [...tracking.assignments, ...ctx.lockedEntries];
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+  // Overflow warnings
+  for (const emp of ctx.employees) {
+    const used = tracking.hoursUsed[emp.id] || 0;
+    if (used > emp.max_hours) {
+      const over = (used - emp.max_hours).toFixed(1).replace(/\.0$/, '');
+      warnings.push(`${emp.name} assigned ${used.toFixed(1).replace(/\.0$/, '')}h (max ${emp.max_hours}h, +${over}h overflow)`);
+    }
+  }
+
+  // Tight availability warnings
+  for (const emp of ctx.employees) {
+    const ideal = getIdealShiftCount(emp);
+    const assigned = tracking.shiftsAssigned[emp.id] || 0;
+    if (assigned < ideal && assigned < 2) {
+      // Count how many days they're eligible for at least one slot
+      let eligibleDays = 0;
+      for (let day = 0; day < 7; day++) {
+        if (emp.employment_type === 'external_coop' && day !== 0 && day !== 6) continue;
+        const hasSlot = ctx.allSlots.some(s => {
+          if (s.day !== day || s.isLocked) return false;
+          return isEmployeeAvailable(emp, ctx.unavailMap, ctx.oldAvailMap, day, s.startTime, s.endTime, s.period);
+        });
+        if (hasSlot) eligibleDays++;
+      }
+      if (eligibleDays <= 2) {
+        warnings.push(`${emp.name} has limited availability — eligible on only ${eligibleDays} of 7 days`);
+      }
+    }
+  }
+
+  // Per-shift warnings
+  for (let day = 0; day < 7; day++) {
+    for (const period of ['morning', 'afternoon', 'night']) {
+      const shiftEntries = allEntries.filter(
+        a => a.day_of_week === day && a.shift_period === period && a.employee_id
+      );
+      if (shiftEntries.length === 0) continue;
+
+      const hasNonTrainee = shiftEntries.some(a => {
+        const emp = ctx.employees.find(e => e.id === a.employee_id);
+        return emp && !emp.is_trainee;
+      });
+      if (!hasNonTrainee) {
+        warnings.push(`${dayNames[day]} ${period} shift has only trainees`);
+      }
+
+      const hasManager = shiftEntries.some(a => {
+        const emp = ctx.employees.find(e => e.id === a.employee_id);
+        return emp && emp.roles && emp.roles.includes(`${period}_manager`);
+      });
+      if (!hasManager) {
+        warnings.push(`${dayNames[day]} ${period} shift has no manager assigned`);
+      }
+
+      if (period === 'night') {
+        const hasMale = shiftEntries.some(a => {
+          const emp = ctx.employees.find(e => e.id === a.employee_id);
+          return emp && emp.gender === 'male';
+        });
+        if (!hasMale) {
+          warnings.push(`${dayNames[day]} night shift has no male employee`);
+        }
+      }
+    }
+  }
+
+  // Unfilled slot warnings
+  const emptySlots = tracking.assignments.filter(a => !a.employee_id);
+  if (emptySlots.length > 0) {
+    const byDay = {};
+    for (const a of emptySlots) {
+      const key = `${dayNames[a.day_of_week]} ${a.shift_period}`;
+      byDay[key] = (byDay[key] || 0) + 1;
+    }
+    for (const [key, count] of Object.entries(byDay)) {
+      warnings.push(`${key} has ${count} unfilled slot(s)`);
+    }
+  }
+
+  return warnings;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Main scheduling function
 // ═══════════════════════════════════════════════════════════════
 
 async function autoGenerate(weekStart, { overflowHours = 0 } = {}) {
-  // ═══ Data Loading (same as original) ═══
+  // ═══ STEP 1: Load data ═══
   const rawEmployees = await db('employees').where({ active: true });
   const employees = rawEmployees.map(emp => {
     let roles = [];
@@ -701,23 +483,14 @@ async function autoGenerate(weekStart, { overflowHours = 0 } = {}) {
       .where(function () {
         this.whereNull('week_start_date').orWhere({ week_start_date: weekStart });
       });
-  } catch (e) {
-    // Table may not exist yet
-  }
+  } catch (e) { /* Table may not exist */ }
 
   let oldAvailability = [];
-  try {
-    oldAvailability = await db('availability');
-  } catch (e) {
-    // ignore
-  }
+  try { oldAvailability = await db('availability'); } catch (e) { /* ignore */ }
 
   let orderDaysRows = [];
-  try {
-    orderDaysRows = await db('order_days');
-  } catch (e) {
-    // Table may not exist yet
-  }
+  try { orderDaysRows = await db('order_days'); } catch (e) { /* Table may not exist */ }
+
   const orderDaysMap = { ag: [], us: [] };
   for (const row of orderDaysRows) {
     orderDaysMap[row.order_type].push(row.day_of_week);
@@ -735,11 +508,6 @@ async function autoGenerate(weekStart, { overflowHours = 0 } = {}) {
     oldAvailMap[a.employee_id][`${a.day_of_week}-${a.shift_period}`] = a.is_available;
   }
 
-  const lockedMap = {};
-  for (const ls of lockedShifts) {
-    lockedMap[`${ls.employee_id}-${ls.day_of_week}-${ls.shift_period}`] = true;
-  }
-
   const slotCounts = {};
   for (const period of ['morning', 'afternoon', 'night']) {
     slotCounts[period] = shiftConfigs.filter(c => c.shift_period === period).length;
@@ -750,11 +518,14 @@ async function autoGenerate(weekStart, { overflowHours = 0 } = {}) {
     settingsMap[`${s.day_of_week}-${s.shift_period}`] = s.employee_count;
   }
 
-  // Clear ALL existing schedule entries for this week (we'll recreate locked ones)
+  // Derive standard shift durations from configs
+  const standardDurations = [...new Set(shiftConfigs.map(c => calcHours(c.start_time, c.end_time)))]
+    .sort((a, b) => b - a);
+
+  // ═══ STEP 2: Clear existing schedule ═══
   await db('schedules').where({ week_start_date: weekStart }).del();
 
-  // Create locked schedule entries from locked_shifts table
-  // Each locked_shifts entry specifies employee + day + period; assign them to the best slot
+  // ═══ STEP 3: Place locked shifts ═══
   const lockedByDayPeriod = {};
   for (const ls of lockedShifts) {
     const key = `${ls.day_of_week}-${ls.shift_period}`;
@@ -762,21 +533,21 @@ async function autoGenerate(weekStart, { overflowHours = 0 } = {}) {
     lockedByDayPeriod[key].push(ls);
   }
 
-  const existingLocked = [];
+  const lockedEntries = [];
   for (const key of Object.keys(lockedByDayPeriod)) {
-    const [dayStr, period] = key.split('-');
+    const [dayStr, ...periodParts] = key.split('-');
     const day = parseInt(dayStr);
+    const period = periodParts.join('-');
     const periodConfigs = shiftConfigs.filter(c => c.shift_period === period);
     const slotsNeeded = settingsMap[key] || slotCounts[period];
     const entries = lockedByDayPeriod[key];
 
-    // Sort locked entries: managers first (they need specific start times)
     entries.sort((a, b) => {
       const empA = employees.find(e => e.id === a.employee_id);
       const empB = employees.find(e => e.id === b.employee_id);
-      const aManager = empA && empA.roles.some(r => r.endsWith('_manager'));
-      const bManager = empB && empB.roles.some(r => r.endsWith('_manager'));
-      return (bManager ? 1 : 0) - (aManager ? 1 : 0);
+      const aM = empA && empA.roles.some(r => r.endsWith('_manager'));
+      const bM = empB && empB.roles.some(r => r.endsWith('_manager'));
+      return (bM ? 1 : 0) - (aM ? 1 : 0);
     });
 
     const usedSlots = new Set();
@@ -784,7 +555,6 @@ async function autoGenerate(weekStart, { overflowHours = 0 } = {}) {
       const emp = employees.find(e => e.id === ls.employee_id);
       if (!emp) continue;
 
-      // Find best slot for this employee in this period
       let bestSlot = null;
       const isManager = emp.roles.includes(`${period}_manager`);
 
@@ -796,7 +566,6 @@ async function autoGenerate(weekStart, { overflowHours = 0 } = {}) {
           break;
         }
       }
-      // If no manager slot found or not a manager, take any open slot
       if (!bestSlot) {
         for (let slotIdx = 0; slotIdx < slotsNeeded; slotIdx++) {
           if (usedSlots.has(slotIdx)) continue;
@@ -808,7 +577,7 @@ async function autoGenerate(weekStart, { overflowHours = 0 } = {}) {
 
       if (bestSlot) {
         usedSlots.add(bestSlot.slotIdx);
-        const entry = {
+        lockedEntries.push({
           week_start_date: weekStart,
           day_of_week: day,
           shift_period: period,
@@ -817,161 +586,102 @@ async function autoGenerate(weekStart, { overflowHours = 0 } = {}) {
           is_locked: true,
           start_time: bestSlot.config.start_time,
           end_time: bestSlot.config.end_time,
-        };
-        existingLocked.push(entry);
+        });
       }
     }
   }
 
-  // Insert all locked entries into DB
-  if (existingLocked.length > 0) {
-    await db('schedules').insert(existingLocked);
+  if (lockedEntries.length > 0) {
+    await db('schedules').insert(lockedEntries);
   }
 
-  // Build set of employees who have locked shifts
-  const lockedEmployeeIds = new Set(lockedShifts.map(ls => ls.employee_id));
+  // ═══ STEP 4: Build all slots and initialize tracking ═══
+  const allSlots = buildAllSlots(shiftConfigs, settingsMap, slotCounts, lockedEntries);
 
-  // ═══ PHASE 0: Pre-computation ═══
-  const daySlots = buildDaySlots(shiftConfigs, settingsMap, slotCounts, existingLocked);
-  // All employees participate in allocation (locked employees have their locked hours pre-counted)
-  const eligibility = buildEligibilityMatrix(employees, daySlots, unavailMap, oldAvailMap);
+  const tracking = {
+    hoursUsed: {},
+    shiftsAssigned: {},
+    daysAssigned: {},
+    dayEmployees: {},
+    dayPeriodAssignments: {},
+    assignments: [],
+  };
 
-  // Initialize tracking
-  const hoursUsed = {};
-  const shiftsAssigned = {};
-  const daysAssigned = {};
   employees.forEach(e => {
-    hoursUsed[e.id] = 0;
-    shiftsAssigned[e.id] = 0;
-    daysAssigned[e.id] = new Set();
+    tracking.hoursUsed[e.id] = 0;
+    tracking.shiftsAssigned[e.id] = 0;
+    tracking.daysAssigned[e.id] = new Set();
   });
 
-  // Account for locked schedule entries (pre-count their hours)
-  for (const entry of existingLocked) {
+  for (let day = 0; day < 7; day++) {
+    tracking.dayEmployees[day] = new Set();
+  }
+
+  // Account for locked shifts
+  for (const entry of lockedEntries) {
     if (entry.employee_id) {
       const hours = calcHours(entry.start_time, entry.end_time);
-      hoursUsed[entry.employee_id] = (hoursUsed[entry.employee_id] || 0) + hours;
-      shiftsAssigned[entry.employee_id] = (shiftsAssigned[entry.employee_id] || 0) + 1;
-      daysAssigned[entry.employee_id] = daysAssigned[entry.employee_id] || new Set();
-      daysAssigned[entry.employee_id].add(entry.day_of_week);
+      tracking.hoursUsed[entry.employee_id] = (tracking.hoursUsed[entry.employee_id] || 0) + hours;
+      tracking.shiftsAssigned[entry.employee_id] = (tracking.shiftsAssigned[entry.employee_id] || 0) + 1;
+      if (!tracking.daysAssigned[entry.employee_id]) tracking.daysAssigned[entry.employee_id] = new Set();
+      tracking.daysAssigned[entry.employee_id].add(entry.day_of_week);
+      tracking.dayEmployees[entry.day_of_week].add(entry.employee_id);
+
+      const key = `${entry.day_of_week}-${entry.shift_period}`;
+      if (!tracking.dayPeriodAssignments[key]) tracking.dayPeriodAssignments[key] = [];
+      tracking.dayPeriodAssignments[key].push(entry);
     }
   }
 
-  // Calculate slots per day
-  const slotsPerDay = [];
-  for (let day = 0; day < 7; day++) {
-    slotsPerDay.push(daySlots[day].length);
-  }
+  // Context object passed to scoring/eligibility functions
+  const ctx = {
+    employees,
+    unavailMap,
+    oldAvailMap,
+    orderDaysMap,
+    lockedEntries,
+    standardDurations,
+    overflowHours,
+    allSlots,
+  };
 
-  // ═══ PHASE 1A: Mandatory pre-assignments ═══
-  const dayAllocation = Array.from({ length: 7 }, () => []);
+  // Get open (non-locked) slots
+  const openSlots = allSlots.filter(s => !s.isLocked);
 
-  // Locked employees are already in the schedule — add them to dayAllocation
-  for (const entry of existingLocked) {
-    if (entry.employee_id && !dayAllocation[entry.day_of_week].includes(entry.employee_id)) {
-      dayAllocation[entry.day_of_week].push(entry.employee_id);
+  // ═══ STEP 5: Pre-assign food order employees ═══
+  preAssignFoodOrders(openSlots, tracking, ctx, weekStart);
+
+  // ═══ STEP 6: Main greedy loop — most constrained slot first ═══
+  const deferredSlots = [];
+
+  while (openSlots.length > 0) {
+    // Compute difficulty for each open slot
+    for (const slot of openSlots) {
+      let count = 0;
+      for (const emp of employees) {
+        if (isEligible(emp, slot, tracking, ctx, false)) count++;
+      }
+      slot.eligibleCount = count;
     }
-  }
 
-  // ═══ PHASE 1B: Day-level allocation with backtracking ═══
-  // All employees participate; locked employees already have their locked days/hours counted
-  const phase1Hours = { ...hoursUsed };
-  const phase1Shifts = { ...shiftsAssigned };
-  const phase1Days = {};
-  for (const emp of employees) {
-    phase1Days[emp.id] = new Set(daysAssigned[emp.id]);
-  }
+    // Sort by constraint priority
+    openSlots.sort(slotPriorityComparator);
 
-  allocateEmployeesToDays(dayAllocation, slotsPerDay, employees, daySlots, eligibility,
-    phase1Hours, phase1Shifts, phase1Days, orderDaysMap);
+    const targetSlot = openSlots[0];
 
-  // ═══ PHASE 1C: Hour budget optimization ═══
-  const targetHours = optimizeHourBudgets(dayAllocation, employees, daySlots, eligibility);
-
-  // ═══ PHASE 2: Slot assignment ═══
-  // Reset hoursUsed to only locked hours (Phase 1 used tentative values)
-  employees.forEach(e => { hoursUsed[e.id] = 0; });
-  for (const entry of existingLocked) {
-    if (entry.employee_id) {
-      const hours = calcHours(entry.start_time, entry.end_time);
-      hoursUsed[entry.employee_id] = (hoursUsed[entry.employee_id] || 0) + hours;
+    if (targetSlot.eligibleCount === 0) {
+      // No one can fill this in strict mode — defer to backfill
+      deferredSlots.push(openSlots.shift());
+      continue;
     }
-  }
 
-  const allAssignments = [];
-  for (let day = 0; day < 7; day++) {
-    // Pass all employees but filter out locked employees from this day's allocated list
-    // (their locked slots are already in DB, but they can fill open slots too)
-    const allocatedForDay = dayAllocation[day].filter(id => !lockedEmployeeIds.has(id) || !existingLocked.some(e => e.employee_id === id && e.day_of_week === day));
-    const dayAssignments = assignSlotsForDay(
-      day, allocatedForDay, daySlots[day], employees, hoursUsed,
-      lockedMap, orderDaysMap, targetHours, existingLocked, weekStart, unavailMap, oldAvailMap, allAssignments, overflowHours
-    );
-    // Filter out locked entries (they're already in DB)
-    const nonLocked = dayAssignments.filter(a => !a.is_locked);
-    allAssignments.push(...nonLocked);
-  }
-
-  // ═══ Final Backfill: catch any remaining empty slots ═══
-  const emptyIndices = [];
-  for (let i = 0; i < allAssignments.length; i++) {
-    if (allAssignments[i].employee_id === null) emptyIndices.push(i);
-  }
-
-  // Sort empty slots by shortest shift first
-  emptyIndices.sort((a, b) => {
-    const aHrs = calcHours(allAssignments[a].start_time, allAssignments[a].end_time);
-    const bHrs = calcHours(allAssignments[b].start_time, allAssignments[b].end_time);
-    return aHrs - bHrs;
-  });
-
-  // Track who's assigned on each day for one-shift-per-day check
-  const dayEmployees = {};
-  for (let day = 0; day < 7; day++) dayEmployees[day] = new Set();
-  for (const a of allAssignments) {
-    if (a.employee_id) dayEmployees[a.day_of_week].add(a.employee_id);
-  }
-  for (const entry of existingLocked) {
-    if (entry.employee_id) dayEmployees[entry.day_of_week].add(entry.employee_id);
-  }
-
-  for (const i of emptyIndices) {
-    const a = allAssignments[i];
-    const shiftHours = calcHours(a.start_time, a.end_time);
-    const slot = {
-      period: a.shift_period,
-      slotIdx: a.slot_index,
-      shiftHours,
-      isManagerSlot: a.slot_index === 0 && a.shift_period !== 'morning',
-      config: { start_time: a.start_time, end_time: a.end_time },
-    };
-
+    // Score all eligible employees
     let bestEmp = null;
     let bestScore = -Infinity;
 
     for (const emp of employees) {
-      if (dayEmployees[a.day_of_week].has(emp.id)) continue;
-      if (!isEmployeeAvailable(emp, unavailMap, oldAvailMap, a.day_of_week, a.start_time, a.end_time, a.shift_period)) continue;
-      if (!canEmployeeWorkSlot(emp, slot, true)) continue; // fully relaxed
-      if (hoursUsed[emp.id] + shiftHours > emp.max_hours + overflowHours) continue;
-      // Night-to-morning rest
-      if (a.shift_period === 'morning' && a.start_time < MIN_MORNING_AFTER_NIGHT &&
-          workedNightPreviousDay(emp.id, a.day_of_week, allAssignments, existingLocked)) continue;
-      if (emp.employment_type === 'external_coop') {
-        if (a.day_of_week !== 0 && a.day_of_week !== 6) continue;
-        // Count current weekend shifts
-        let weekendCount = 0;
-        for (const aa of allAssignments) {
-          if (aa.employee_id === emp.id && (aa.day_of_week === 0 || aa.day_of_week === 6)) weekendCount++;
-        }
-        if (weekendCount >= 2) continue;
-      }
-
-      // Fairness-weighted score for backfill
-      let score = computeSlotScore(emp, slot, a.day_of_week, allAssignments.filter(x => x.day_of_week === a.day_of_week),
-        employees, lockedMap, orderDaysMap, targetHours, hoursUsed);
-      // Extra fairness bonus for backfill: strongly prefer employees with 0 hours
-      if (hoursUsed[emp.id] === 0) score += 600;
+      if (!isEligible(emp, targetSlot, tracking, ctx, false)) continue;
+      const score = computeScore(emp, targetSlot, tracking, ctx);
       if (score > bestScore) {
         bestScore = score;
         bestEmp = emp;
@@ -979,114 +689,32 @@ async function autoGenerate(weekStart, { overflowHours = 0 } = {}) {
     }
 
     if (bestEmp) {
-      allAssignments[i].employee_id = bestEmp.id;
-      hoursUsed[bestEmp.id] += shiftHours;
-      dayEmployees[a.day_of_week].add(bestEmp.id);
+      assignToSlot(bestEmp, targetSlot, tracking, weekStart);
+    } else {
+      // Shouldn't happen (eligibleCount > 0) but just in case
+      deferredSlots.push(targetSlot);
     }
+
+    openSlots.shift();
   }
 
-  // Insert all non-locked assignments
-  if (allAssignments.length > 0) {
+  // ═══ STEP 7: Relaxed backfill ═══
+  if (deferredSlots.length > 0) {
+    relaxedBackfill(deferredSlots, tracking, ctx, weekStart);
+  }
+
+  // ═══ STEP 8: Save to DB ═══
+  if (tracking.assignments.length > 0) {
     const batchSize = 50;
-    for (let i = 0; i < allAssignments.length; i += batchSize) {
-      await db('schedules').insert(allAssignments.slice(i, i + batchSize));
+    for (let i = 0; i < tracking.assignments.length; i += batchSize) {
+      await db('schedules').insert(tracking.assignments.slice(i, i + batchSize));
     }
   }
 
-  // Generate warnings
-  const warnings = generateWarnings(allAssignments, existingLocked, employees, hoursUsed);
+  // ═══ STEP 9: Warnings ═══
+  const warnings = generateWarnings(tracking, ctx);
 
-  return { success: true, assignments_count: allAssignments.length, warnings };
-}
-
-function isEmployeeAvailable(emp, unavailMap, oldAvailMap, day, shiftStartTime, shiftEndTime, period) {
-  const empUnavail = unavailMap[emp.id];
-
-  // If employee has time-based unavailable blocks, use them
-  if (empUnavail && empUnavail.length > 0) {
-    const dayBlocks = empUnavail.filter(u => u.day_of_week === day);
-    // Employee is available if none of their unavailable blocks overlap with the shift
-    for (const block of dayBlocks) {
-      if (timesOverlap(shiftStartTime, shiftEndTime, block.start_time, block.end_time)) {
-        return false; // Overlaps with an unavailable block
-      }
-    }
-    return true;
-  }
-
-  // Fall back to old period-based availability
-  if (oldAvailMap[emp.id]) {
-    return oldAvailMap[emp.id][`${day}-${period}`] !== false;
-  }
-
-  // Default: available
-  return true;
-}
-
-function generateWarnings(assignments, lockedEntries, employees, hoursUsed) {
-  const warnings = [];
-  const allEntries = [...assignments, ...lockedEntries];
-
-  // Overflow warnings
-  if (hoursUsed) {
-    for (const emp of employees) {
-      const used = hoursUsed[emp.id] || 0;
-      if (used > emp.max_hours) {
-        const over = (used - emp.max_hours).toFixed(1).replace(/\.0$/, '');
-        warnings.push(`${emp.name} assigned ${used.toFixed(1).replace(/\.0$/, '')}h (max ${emp.max_hours}h, +${over}h overflow)`);
-      }
-    }
-  }
-
-  for (let day = 0; day < 7; day++) {
-    for (const period of ['morning', 'afternoon', 'night']) {
-      const shiftEntries = allEntries.filter(
-        a => a.day_of_week === day && a.shift_period === period && a.employee_id
-      );
-
-      if (shiftEntries.length === 0) continue;
-
-      const hasNonTrainee = shiftEntries.some(a => {
-        const emp = employees.find(e => e.id === a.employee_id);
-        return emp && !emp.is_trainee;
-      });
-
-      if (!hasNonTrainee) {
-        const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-        warnings.push(`${dayNames[day]} ${period} shift has only trainees`);
-      }
-
-      // Check for at least one manager in this period
-      const hasManager = shiftEntries.some(a => {
-        const emp = employees.find(e => e.id === a.employee_id);
-        return emp && emp.roles && emp.roles.includes(`${period}_manager`);
-      });
-      if (!hasManager) {
-        const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-        warnings.push(`${dayNames[day]} ${period} shift has no manager assigned`);
-      }
-
-      // Night shift: warn if no male employee
-      if (period === 'night') {
-        const hasMale = shiftEntries.some(a => {
-          const emp = employees.find(e => e.id === a.employee_id);
-          return emp && emp.gender === 'male';
-        });
-        if (!hasMale) {
-          const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-          warnings.push(`${dayNames[day]} night shift has no male employee`);
-        }
-      }
-
-      const emptySlots = shiftEntries.filter(a => !a.employee_id);
-      if (emptySlots.length > 0) {
-        const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-        warnings.push(`${dayNames[day]} ${period} shift has ${emptySlots.length} unfilled slot(s)`);
-      }
-    }
-  }
-
-  return warnings;
+  return { success: true, assignments_count: tracking.assignments.length, warnings };
 }
 
 module.exports = { autoGenerate, isEmployeeAvailable, timesOverlap };

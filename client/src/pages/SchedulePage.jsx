@@ -30,18 +30,28 @@ const PERIOD_ACCENT = {
   night: '#8B83FF',
 };
 
+function formatLocalDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+}
+
+function parseDate(str) {
+  const [y, m, d] = str.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
 function getWeekStart(date) {
-  const d = new Date(date);
-  const day = d.getDay();
-  d.setDate(d.getDate() - day);
-  return d.toISOString().split('T')[0];
+  const d = typeof date === 'string' ? parseDate(date) : new Date(date);
+  d.setDate(d.getDate() - d.getDay());
+  return formatLocalDate(d);
 }
 
 function getNextWeekStart() {
   const d = new Date();
-  const day = d.getDay();
-  d.setDate(d.getDate() - day + 7); // next Sunday
-  return d.toISOString().split('T')[0];
+  d.setDate(d.getDate() - d.getDay() + 7); // next Sunday
+  return formatLocalDate(d);
 }
 
 function fmt(time24) {
@@ -128,9 +138,9 @@ export default function SchedulePage() {
   useEffect(() => { loadSchedule(); }, [loadSchedule]);
 
   const changeWeek = (offset) => {
-    const d = new Date(weekStart);
+    const d = parseDate(weekStart);
     d.setDate(d.getDate() + offset * 7);
-    setWeekStart(d.toISOString().split('T')[0]);
+    setWeekStart(formatLocalDate(d));
   };
 
   const getEntryTimes = (day, period, slotIdx) => {
@@ -475,7 +485,7 @@ export default function SchedulePage() {
       {Array.from({ length: 7 }, (_, day) => {
         const isAgOrderDay = orderDays.ag?.includes(day);
         const isUsOrderDay = orderDays.us?.includes(day);
-        const dayDate = new Date(weekStart + 'T00:00:00');
+        const dayDate = parseDate(weekStart);
         dayDate.setDate(dayDate.getDate() + day);
         const dateStr = `${String(dayDate.getMonth() + 1).padStart(2, '0')}/${String(dayDate.getDate()).padStart(2, '0')}`;
 
