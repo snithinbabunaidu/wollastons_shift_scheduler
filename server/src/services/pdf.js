@@ -246,24 +246,24 @@ function buildDayTable(day, weekStart, scheduleData, shiftConfigs, orderDaysMap)
 
   const body = [];
 
-  // Day header
+  // Day header (9 columns: [start, name, end] × 3 periods)
   body.push([{
     text: [
       { text: `${DAY_NAMES[day]}`, bold: true, fontSize: 12, color: COLORS.headerText },
       { text: `  ${dateStr}`, bold: true, fontSize: 10, color: '#C8C4FF' },
       { text: orderStr, fontSize: 8.5, color: COLORS.orderTagColor, bold: true },
     ],
-    colSpan: 6, fillColor: COLORS.headerBg, alignment: 'center', margin: [0, 3],
-  }, {}, {}, {}, {}, {}]);
+    colSpan: 9, fillColor: COLORS.headerBg, alignment: 'center', margin: [0, 3],
+  }, {}, {}, {}, {}, {}, {}, {}, {}]);
 
-  // Period column headers
+  // Period column headers — each spans 3 columns
   body.push([
-    { text: 'Time', bold: true, fontSize: 7.5, color: COLORS.morningHeaderText, fillColor: COLORS.morningHeaderBg, alignment: 'center', margin: [0, 2] },
-    { text: 'MORNING', bold: true, fontSize: 7.5, color: COLORS.morningHeaderText, fillColor: COLORS.morningHeaderBg, alignment: 'center', margin: [0, 2] },
-    { text: 'Time', bold: true, fontSize: 7.5, color: COLORS.afternoonHeaderText, fillColor: COLORS.afternoonHeaderBg, alignment: 'center', margin: [0, 2] },
-    { text: 'AFTERNOON', bold: true, fontSize: 7.5, color: COLORS.afternoonHeaderText, fillColor: COLORS.afternoonHeaderBg, alignment: 'center', margin: [0, 2] },
-    { text: 'Time', bold: true, fontSize: 7.5, color: COLORS.nightHeaderText, fillColor: COLORS.nightHeaderBg, alignment: 'center', margin: [0, 2] },
-    { text: 'NIGHT', bold: true, fontSize: 7.5, color: COLORS.nightHeaderText, fillColor: COLORS.nightHeaderBg, alignment: 'center', margin: [0, 2] },
+    { text: 'MORNING', bold: true, fontSize: 8.5, color: COLORS.morningHeaderText, fillColor: COLORS.morningHeaderBg, alignment: 'center', margin: [0, 2], colSpan: 3 },
+    {}, {},
+    { text: 'AFTERNOON', bold: true, fontSize: 8.5, color: COLORS.afternoonHeaderText, fillColor: COLORS.afternoonHeaderBg, alignment: 'center', margin: [0, 2], colSpan: 3 },
+    {}, {},
+    { text: 'NIGHT', bold: true, fontSize: 8.5, color: COLORS.nightHeaderText, fillColor: COLORS.nightHeaderBg, alignment: 'center', margin: [0, 2], colSpan: 3 },
+    {}, {},
   ]);
 
   // Data rows — skip rows where no employee is assigned in any period
@@ -283,50 +283,58 @@ function buildDayTable(day, weekStart, scheduleData, shiftConfigs, orderDaysMap)
       const { entries, configs } = periodSlots[period];
       const entry = entries.find(e => e.slot_index === rowIdx);
       const config = configs.find(c => c.slot_index === rowIdx);
+      const periodColor = getNameColor(period);
 
       if (entry && entry.employee_name) {
         const startTime = entry.start_time || config?.start_time;
         const endTime = entry.end_time || config?.end_time;
-        const timeStr = `${formatTime(startTime)}-${formatTime(endTime)}`;
-        const nameColor = getNameColor(period);
 
+        // Start time — same period color
         row.push({
-          text: timeStr, fontSize: 7.5, bold: true, color: COLORS.timeText,
+          text: formatTime(startTime), fontSize: 8, bold: true, color: periodColor,
           fillColor: rowBg, alignment: 'center', margin: [0, 2],
         });
 
+        // Name — big and readable
         if (entry.is_trainee) {
           row.push({
             text: [
-              { text: entry.employee_name, fontSize: 9.5, bold: true, color: nameColor },
+              { text: entry.employee_name, fontSize: 11, bold: true, color: periodColor },
               { text: ' (T)', fontSize: 7, color: COLORS.traineeTag, italics: true },
             ],
-            fillColor: rowBg, margin: [2, 2],
+            fillColor: rowBg, alignment: 'center', margin: [0, 2],
           });
         } else {
           row.push({
-            text: entry.employee_name, fontSize: 9.5, bold: true, color: nameColor,
-            fillColor: rowBg, margin: [2, 2],
+            text: entry.employee_name, fontSize: 11, bold: true, color: periodColor,
+            fillColor: rowBg, alignment: 'center', margin: [0, 2],
           });
         }
+
+        // End time — same period color
+        row.push({
+          text: formatTime(endTime), fontSize: 8, bold: true, color: periodColor,
+          fillColor: rowBg, alignment: 'center', margin: [0, 2],
+        });
       } else {
-        // Empty cell — show blank
+        // Empty cell — 3 blank columns
         row.push({ text: '', fillColor: rowBg, margin: [0, 2] });
-        row.push({ text: '', fillColor: rowBg, margin: [2, 2] });
+        row.push({ text: '', fillColor: rowBg, margin: [0, 2] });
+        row.push({ text: '', fillColor: rowBg, margin: [0, 2] });
       }
     }
     body.push(row);
   }
 
   return {
-    table: { headerRows: 2, widths: [55, '*', 55, '*', 55, '*'], body },
+    table: { headerRows: 2, widths: [30, '*', 30, 30, '*', 30, 30, '*', 30], body },
     layout: {
       hLineWidth: (i) => (i <= 2 ? 0.8 : 0.4),
-      vLineWidth: () => 0.4,
+      vLineWidth: (i) => (i === 3 || i === 6) ? 1.2 : 0.3,
       hLineColor: () => COLORS.borderColor,
-      vLineColor: () => COLORS.borderColor,
-      paddingLeft: () => 2,
-      paddingRight: () => 2,
+      vLineColor: (i) => (i === 3 || i === 6) ? COLORS.accentPurple : COLORS.borderColor,
+      paddingLeft: () => 1,
+      paddingRight: () => 1,
       paddingTop: () => 1,
       paddingBottom: () => 1,
     },
@@ -384,11 +392,10 @@ function buildSummaryPages(employeeHours, allEmployees, logoBase64, weekStart) {
 
 function buildSummaryTable(employees, startIdx, totalHours, scheduledCount, totalCount) {
   const body = [[
-    { text: '#', bold: true, fontSize: 10, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [3, 5], alignment: 'center' },
-    { text: 'Employee', bold: true, fontSize: 10, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [3, 5], alignment: 'left' },
-    { text: 'Type', bold: true, fontSize: 10, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [3, 5], alignment: 'center' },
-    { text: 'Max Hours', bold: true, fontSize: 10, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [3, 5], alignment: 'center' },
-    { text: 'Scheduled', bold: true, fontSize: 10, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [3, 5], alignment: 'center' },
+    { text: '#', bold: true, fontSize: 11, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [3, 5], alignment: 'center' },
+    { text: 'Employee', bold: true, fontSize: 11, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [3, 5], alignment: 'left' },
+    { text: 'Type', bold: true, fontSize: 11, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [3, 5], alignment: 'center' },
+    { text: 'Hours', bold: true, fontSize: 11, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [3, 5], alignment: 'center' },
   ]];
 
   for (let i = 0; i < employees.length; i++) {
@@ -404,42 +411,38 @@ function buildSummaryTable(employees, startIdx, totalHours, scheduledCount, tota
     if (emp.is_trainee) {
       nameCell = {
         text: [
-          { text: emp.name, fontSize: 10.5, bold: true, color: COLORS.cellText },
-          { text: ' (T)', fontSize: 7.5, color: COLORS.traineeTag, italics: true },
+          { text: emp.name, fontSize: 12, bold: true, color: COLORS.cellText },
+          { text: ' (T)', fontSize: 8, color: COLORS.traineeTag, italics: true },
         ],
-        fillColor: rowBg, margin: [3, 5],
+        fillColor: rowBg, margin: [3, 6],
       };
     } else {
       nameCell = {
-        text: emp.name, fontSize: 10.5, bold: true, color: COLORS.cellText,
-        fillColor: rowBg, margin: [3, 5],
+        text: emp.name, fontSize: 12, bold: true, color: COLORS.cellText,
+        fillColor: rowBg, margin: [3, 6],
       };
     }
 
-    const maxH = emp.max_hours || 20;
-
     body.push([
-      { text: String(idx + 1), fontSize: 9, bold: true, color: COLORS.timeText, fillColor: rowBg, alignment: 'center', margin: [3, 5] },
+      { text: String(idx + 1), fontSize: 10, bold: true, color: COLORS.timeText, fillColor: rowBg, alignment: 'center', margin: [3, 6] },
       nameCell,
-      { text: empTypeLabel, fontSize: 8.5, color: COLORS.timeText, fillColor: rowBg, alignment: 'center', margin: [3, 5] },
-      { text: `${maxH}h`, fontSize: 10, color: COLORS.cellText, fillColor: rowBg, alignment: 'center', margin: [3, 5] },
-      { text: emp.hours > 0 ? emp.hours.toFixed(1) + 'h' : '0h', fontSize: 11, bold: true, color: COLORS.cellText, fillColor: rowBg, alignment: 'center', margin: [3, 5] },
+      { text: empTypeLabel, fontSize: 10, color: COLORS.timeText, fillColor: rowBg, alignment: 'center', margin: [3, 6] },
+      { text: emp.hours > 0 ? emp.hours.toFixed(1) + 'h' : '0h', fontSize: 12, bold: true, color: COLORS.cellText, fillColor: rowBg, alignment: 'center', margin: [3, 6] },
     ]);
   }
 
   // Total row only on the last page
   if (totalHours !== undefined) {
     body.push([
-      { text: '', fillColor: COLORS.totalRowBg, margin: [3, 6] },
-      { text: `Total (${scheduledCount}/${totalCount} scheduled)`, bold: true, fontSize: 11, color: COLORS.totalRowText, fillColor: COLORS.totalRowBg, margin: [3, 6], colSpan: 2 },
+      { text: '', fillColor: COLORS.totalRowBg, margin: [3, 7] },
+      { text: `Total (${scheduledCount}/${totalCount} scheduled)`, bold: true, fontSize: 12, color: COLORS.totalRowText, fillColor: COLORS.totalRowBg, margin: [3, 7], colSpan: 2 },
       {},
-      { text: '', fillColor: COLORS.totalRowBg, margin: [3, 6] },
-      { text: totalHours.toFixed(1) + 'h', bold: true, fontSize: 12, color: COLORS.totalRowText, fillColor: COLORS.totalRowBg, alignment: 'center', margin: [3, 6] },
+      { text: totalHours.toFixed(1) + 'h', bold: true, fontSize: 13, color: COLORS.totalRowText, fillColor: COLORS.totalRowBg, alignment: 'center', margin: [3, 7] },
     ]);
   }
 
   return {
-    table: { headerRows: 1, widths: [25, '*', 65, 50, 60], body },
+    table: { headerRows: 1, widths: [30, '*', 75, 65], body },
     layout: {
       hLineWidth: (i) => (i <= 1 ? 1.0 : 0.4),
       vLineWidth: () => 0.4,
