@@ -93,6 +93,23 @@ router.put('/:weekStart', async (req, res) => {
       }
     }
 
+    // Clean up orphaned slots when user reduces slot count with "-" button
+    const maxSlotPerGroup = {};
+    for (const a of assignments) {
+      const key = `${a.day_of_week}-${a.shift_period}`;
+      if (maxSlotPerGroup[key] === undefined || a.slot_index > maxSlotPerGroup[key]) {
+        maxSlotPerGroup[key] = a.slot_index;
+      }
+    }
+    for (const [key, maxSlot] of Object.entries(maxSlotPerGroup)) {
+      const [dayOfWeek, shiftPeriod] = key.split('-');
+      await db('schedules').where({
+        week_start_date: weekStart,
+        day_of_week: parseInt(dayOfWeek),
+        shift_period: shiftPeriod,
+      }).where('slot_index', '>', maxSlot).del();
+    }
+
     res.json({ success: true });
   } catch (err) {
     console.error(err);
