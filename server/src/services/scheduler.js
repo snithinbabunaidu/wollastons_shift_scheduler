@@ -106,8 +106,9 @@ function isEligible(emp, slot, tracking, ctx, relaxed = false) {
   // One shift per day
   if (tracking.daysAssigned[emp.id].has(slot.day)) return false;
 
-  // Hours limit
-  const maxAllowed = emp.max_hours + (relaxed ? ctx.overflowHours : 0);
+  // Hours limit (relaxed mode: always allow at least 2h overflow to fill slots)
+  const overflow = relaxed ? Math.max(ctx.overflowHours, 2) : 0;
+  const maxAllowed = emp.max_hours + overflow;
   if (tracking.hoursUsed[emp.id] + slot.hours > maxAllowed) return false;
 
   // External coop: weekends only, max 2 shifts
@@ -121,19 +122,12 @@ function isEligible(emp, slot, tracking, ctx, relaxed = false) {
 
   // Manager role restrictions
   const hasManagerRole = emp.roles.some(r => r.endsWith('_manager'));
-  if (relaxed) {
-    // Relaxed: non-managers can fill any slot, managers still period-restricted
-    if (hasManagerRole) {
-      if (!emp.roles.some(r => r.replace('_manager', '') === slot.period)) return false;
-    }
-  } else {
-    // Strict mode
-    if (hasManagerRole) {
-      if (!emp.roles.some(r => r.replace('_manager', '') === slot.period)) return false;
-    } else {
-      if (slot.isManagerSlot) return false;
-      if (slot.period === 'morning' && slot.startTime === '06:00') return false;
-    }
+  if (hasManagerRole) {
+    // Managers can only work their designated period
+    if (!emp.roles.some(r => r.replace('_manager', '') === slot.period)) return false;
+  } else if (!relaxed) {
+    // Strict: non-managers skip manager-designated slots (slot 0 of afternoon/night)
+    if (slot.isManagerSlot) return false;
   }
 
   // Night-to-morning rest rule
@@ -180,8 +174,9 @@ function computeIdealShiftBonus(emp, slot, tracking, standardDurations) {
   const ideal = getIdealShiftCount(emp);
 
   if (totalShifts <= ideal) return 200;
-  if (totalShifts === ideal + 1) return 50;
-  return -100 * (totalShifts - ideal - 1);
+  if (totalShifts === ideal + 1) return 150;
+  if (totalShifts === ideal + 2) return 80;
+  return 0; // Never penalize extra shifts — filling slots is priority
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -210,12 +205,12 @@ function computeScore(emp, slot, tracking, ctx) {
   const utilization = tracking.hoursUsed[emp.id] / emp.max_hours;
   score += (1 - utilization) * 500;
 
-  // Spread penalty
+  // Spread penalty (soft — filling slots is more important than perfect fairness)
   const totalEmps = ctx.employees.length;
   const totalAssigned = ctx.employees.reduce((s, e) => s + tracking.shiftsAssigned[e.id], 0);
   const avgShifts = totalAssigned / totalEmps;
-  if (tracking.shiftsAssigned[emp.id] >= avgShifts + 2) score -= 400;
-  else if (tracking.shiftsAssigned[emp.id] >= avgShifts + 1) score -= 200;
+  if (tracking.shiftsAssigned[emp.id] >= avgShifts + 2) score -= 150;
+  else if (tracking.shiftsAssigned[emp.id] >= avgShifts + 1) score -= 50;
 
   // ═══ T3: Shift quality (200-500) ═══
   score += computeIdealShiftBonus(emp, slot, tracking, ctx.standardDurations);
@@ -252,7 +247,14 @@ function computeScore(emp, slot, tracking, ctx) {
     else score -= 300;
   }
 
-  // ═══ T5: Tiebreakers ═══
+  // ═══ T5: Employee scarcity — fewer available slots = higher priority ═══
+  const eligibleSlots = ctx.empEligibleSlotCount[emp.id] || 1;
+  if (eligibleSlots <= 5) score += 600;       // Very constrained (e.g., Gaurang: only 8PM-1AM Mon-Thu)
+  else if (eligibleSlots <= 10) score += 400;
+  else if (eligibleSlots <= 20) score += 200;
+  // Flexible employees (20+ slots) get no bonus — they can fit anywhere
+
+  // ═══ T6: Tiebreakers ═══
   score += (emp.max_hours - tracking.hoursUsed[emp.id]) / emp.max_hours * 50;
   if (emp.is_trainee) score -= 30;
 
@@ -336,10 +338,13 @@ function preAssignFoodOrders(openSlots, tracking, ctx, weekStart) {
 // ═══════════════════════════════════════════════════════════════
 
 function relaxedBackfill(deferredSlots, tracking, ctx, weekStart) {
-  // Sort: shortest shifts first (easier to fit with overflow)
-  deferredSlots.sort((a, b) => a.hours - b.hours);
+  // Multiple passes with increasing relaxation
+  let remaining = [...deferredSlots];
 
-  for (const slot of deferredSlots) {
+  // Pass 1: relaxed mode (managers can fill any slot, non-managers can fill manager slots)
+  // with 2h overflow tolerance
+  let stillRemaining = [];
+  for (const slot of remaining) {
     let bestEmp = null;
     let bestScore = -Infinity;
 
@@ -355,17 +360,171 @@ function relaxedBackfill(deferredSlots, tracking, ctx, weekStart) {
     if (bestEmp) {
       assignToSlot(bestEmp, slot, tracking, weekStart);
     } else {
-      // Truly unfillable — empty assignment
-      tracking.assignments.push({
-        week_start_date: weekStart,
-        day_of_week: slot.day,
-        shift_period: slot.period,
-        slot_index: slot.slotIdx,
-        employee_id: null,
-        is_locked: false,
-        start_time: slot.startTime,
-        end_time: slot.endTime,
-      });
+      stillRemaining.push(slot);
+    }
+  }
+
+  // Pass 2: even more aggressive — allow up to 4h overflow
+  remaining = stillRemaining;
+  stillRemaining = [];
+  const savedOverflow = ctx.overflowHours;
+  ctx.overflowHours = 4;
+
+  for (const slot of remaining) {
+    let bestEmp = null;
+    let bestScore = -Infinity;
+
+    for (const emp of ctx.employees) {
+      if (!isEligible(emp, slot, tracking, ctx, true)) continue;
+      const score = computeScore(emp, slot, tracking, ctx);
+      if (score > bestScore) {
+        bestScore = score;
+        bestEmp = emp;
+      }
+    }
+
+    if (bestEmp) {
+      assignToSlot(bestEmp, slot, tracking, weekStart);
+    } else {
+      stillRemaining.push(slot);
+    }
+  }
+
+  ctx.overflowHours = savedOverflow;
+
+  // Remaining are truly unfillable — create empty assignments
+  for (const slot of stillRemaining) {
+    tracking.assignments.push({
+      week_start_date: weekStart,
+      day_of_week: slot.day,
+      shift_period: slot.period,
+      slot_index: slot.slotIdx,
+      employee_id: null,
+      is_locked: false,
+      start_time: slot.startTime,
+      end_time: slot.endTime,
+    });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Hour-maximizer pass: ensure employees reach their max_hours
+// ═══════════════════════════════════════════════════════════════
+
+function hourMaximizerPass(tracking, ctx, weekStart) {
+  // Find employees significantly under their max_hours (gap >= 4h means a missed shift)
+  const underUtilized = ctx.employees
+    .filter(e => {
+      const gap = e.max_hours - tracking.hoursUsed[e.id];
+      return gap >= 4; // at least one more shift could fit
+    })
+    .sort((a, b) => {
+      // Most under-utilized first
+      const gapA = a.max_hours - tracking.hoursUsed[a.id];
+      const gapB = b.max_hours - tracking.hoursUsed[b.id];
+      return gapB - gapA;
+    });
+
+  if (underUtilized.length === 0) return;
+
+  // First: try to fill any empty slots with under-utilized employees
+  const emptyAssignments = tracking.assignments.filter(a => !a.employee_id);
+  for (const empty of emptyAssignments) {
+    const slot = {
+      day: empty.day_of_week,
+      period: empty.shift_period,
+      slotIdx: empty.slot_index,
+      startTime: empty.start_time,
+      endTime: empty.end_time,
+      hours: calcHours(empty.start_time, empty.end_time),
+      isManagerSlot: empty.slot_index === 0 && empty.shift_period !== 'morning',
+    };
+
+    let bestEmp = null;
+    let bestGap = -1;
+    for (const emp of underUtilized) {
+      if (isEligible(emp, slot, tracking, ctx, true)) {
+        const gap = emp.max_hours - tracking.hoursUsed[emp.id];
+        if (gap > bestGap) {
+          bestGap = gap;
+          bestEmp = emp;
+        }
+      }
+    }
+
+    if (bestEmp) {
+      // Fill the empty slot
+      empty.employee_id = bestEmp.id;
+      tracking.hoursUsed[bestEmp.id] += slot.hours;
+      tracking.shiftsAssigned[bestEmp.id] += 1;
+      tracking.daysAssigned[bestEmp.id].add(slot.day);
+      tracking.dayEmployees[slot.day].add(bestEmp.id);
+      const key = `${slot.day}-${slot.period}`;
+      if (!tracking.dayPeriodAssignments[key]) tracking.dayPeriodAssignments[key] = [];
+      tracking.dayPeriodAssignments[key].push(empty);
+    }
+  }
+
+  // Second: try swapping over-utilized employees with under-utilized ones
+  // Find assignments where the current employee is at/over their target
+  // and an under-utilized employee could take the slot instead
+  const underUtilizedRefresh = ctx.employees
+    .filter(e => (e.max_hours - tracking.hoursUsed[e.id]) >= 4)
+    .sort((a, b) => (b.max_hours - tracking.hoursUsed[b.id]) - (a.max_hours - tracking.hoursUsed[a.id]));
+
+  for (const emp of underUtilizedRefresh) {
+    if (emp.max_hours - tracking.hoursUsed[emp.id] < 4) continue;
+
+    // Find slots where the current assignee is over their max or could give up this slot
+    for (const assignment of tracking.assignments) {
+      if (!assignment.employee_id || assignment.is_locked) continue;
+      if (assignment.employee_id === emp.id) continue;
+
+      const currentHolder = ctx.employees.find(e => e.id === assignment.employee_id);
+      if (!currentHolder) continue;
+
+      // Only swap if current holder is at/over their max hours
+      // and emp is under-utilized
+      const holderUsed = tracking.hoursUsed[currentHolder.id];
+      const slotHours = calcHours(assignment.start_time, assignment.end_time);
+      const holderAfterRemoval = holderUsed - slotHours;
+
+      // Current holder should still be at/above their ideal after giving up this slot
+      if (holderAfterRemoval < currentHolder.max_hours - slotHours) continue;
+      // Only swap if holder is over max (with overflow) and emp is well under
+      if (holderUsed <= currentHolder.max_hours && (emp.max_hours - tracking.hoursUsed[emp.id]) < slotHours) continue;
+
+      const slot = {
+        day: assignment.day_of_week,
+        period: assignment.shift_period,
+        slotIdx: assignment.slot_index,
+        startTime: assignment.start_time,
+        endTime: assignment.end_time,
+        hours: slotHours,
+        isManagerSlot: assignment.slot_index === 0 && assignment.shift_period !== 'morning',
+      };
+
+      // Check if emp can take this slot
+      if (!isEligible(emp, slot, tracking, ctx, true)) continue;
+
+      // Do the swap: remove from current holder, give to emp
+      tracking.hoursUsed[currentHolder.id] -= slotHours;
+      tracking.shiftsAssigned[currentHolder.id] -= 1;
+      tracking.daysAssigned[currentHolder.id].delete(slot.day);
+      tracking.dayEmployees[slot.day].delete(currentHolder.id);
+
+      assignment.employee_id = emp.id;
+      tracking.hoursUsed[emp.id] += slotHours;
+      tracking.shiftsAssigned[emp.id] += 1;
+      tracking.daysAssigned[emp.id].add(slot.day);
+      tracking.dayEmployees[slot.day].add(emp.id);
+
+      const key = `${slot.day}-${slot.period}`;
+      const periodArr = tracking.dayPeriodAssignments[key] || [];
+      const idx = periodArr.findIndex(a => a === assignment);
+      if (idx !== -1) periodArr[idx] = assignment;
+
+      if (emp.max_hours - tracking.hoursUsed[emp.id] < 4) break;
     }
   }
 }
@@ -643,10 +802,26 @@ async function autoGenerate(weekStart, { overflowHours = 0 } = {}) {
     standardDurations,
     overflowHours,
     allSlots,
+    empEligibleSlotCount: {}, // pre-computed: how many total slots each employee can fill
   };
 
   // Get open (non-locked) slots
   const openSlots = allSlots.filter(s => !s.isLocked);
+
+  // Pre-compute how many slots each employee is eligible for (scarcity measure)
+  // Employees who can only fill a few slots should get priority
+  for (const emp of employees) {
+    let count = 0;
+    for (const slot of openSlots) {
+      if (isEmployeeAvailable(emp, unavailMap, oldAvailMap, slot.day, slot.startTime, slot.endTime, slot.period)) {
+        // Basic availability check (not full eligibility — just time-based)
+        if (emp.employment_type === 'external_coop' && slot.day !== 0 && slot.day !== 6) continue;
+        if (emp.is_trainee && slot.period === 'morning' && slot.startTime === '06:00') continue;
+        count++;
+      }
+    }
+    ctx.empEligibleSlotCount[emp.id] = count;
+  }
 
   // ═══ STEP 5: Pre-assign food order employees ═══
   preAssignFoodOrders(openSlots, tracking, ctx, weekStart);
@@ -702,6 +877,11 @@ async function autoGenerate(weekStart, { overflowHours = 0 } = {}) {
   if (deferredSlots.length > 0) {
     relaxedBackfill(deferredSlots, tracking, ctx, weekStart);
   }
+
+  // ═══ STEP 7B: Hour-maximizer pass ═══
+  // Find employees under their max_hours and try to swap them into empty slots
+  // or slots held by over-utilized employees
+  hourMaximizerPass(tracking, ctx, weekStart);
 
   // ═══ STEP 8: Save to DB ═══
   if (tracking.assignments.length > 0) {
