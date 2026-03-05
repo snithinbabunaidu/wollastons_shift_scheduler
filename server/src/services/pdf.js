@@ -266,10 +266,18 @@ function buildDayTable(day, weekStart, scheduleData, shiftConfigs, orderDaysMap)
     { text: 'NIGHT', bold: true, fontSize: 7.5, color: COLORS.nightHeaderText, fillColor: COLORS.nightHeaderBg, alignment: 'center', margin: [0, 2] },
   ]);
 
-  // Data rows
+  // Data rows — skip rows where no employee is assigned in any period
+  let visibleRowIdx = 0;
   for (let rowIdx = 0; rowIdx < maxRows; rowIdx++) {
+    const hasAssigned = PERIODS.some(period => {
+      const entry = periodSlots[period].entries.find(e => e.slot_index === rowIdx);
+      return entry && entry.employee_name;
+    });
+    if (!hasAssigned) continue;
+
     const row = [];
-    const rowBg = rowIdx % 2 === 0 ? COLORS.whiteBg : COLORS.altRowBg;
+    const rowBg = visibleRowIdx % 2 === 0 ? COLORS.whiteBg : COLORS.altRowBg;
+    visibleRowIdx++;
 
     for (const period of PERIODS) {
       const { entries, configs } = periodSlots[period];
@@ -282,13 +290,11 @@ function buildDayTable(day, weekStart, scheduleData, shiftConfigs, orderDaysMap)
         const timeStr = `${formatTime(startTime)}-${formatTime(endTime)}`;
         const nameColor = getNameColor(period);
 
-        // Time cell
         row.push({
-          text: timeStr, fontSize: 8.5, bold: true, color: COLORS.timeText,
+          text: timeStr, fontSize: 7.5, bold: true, color: COLORS.timeText,
           fillColor: rowBg, alignment: 'center', margin: [0, 2],
         });
 
-        // Name cell with period-colored text
         if (entry.is_trainee) {
           row.push({
             text: [
@@ -304,16 +310,9 @@ function buildDayTable(day, weekStart, scheduleData, shiftConfigs, orderDaysMap)
           });
         }
       } else {
-        // Empty slot
-        const timeStr = config ? `${formatTime(config.start_time)}-${formatTime(config.end_time)}` : '';
-        row.push({
-          text: timeStr || '', fontSize: 8, bold: true, color: COLORS.emptySlot,
-          fillColor: rowBg, alignment: 'center', margin: [0, 2],
-        });
-        row.push({
-          text: '—', fontSize: 8.5, color: COLORS.emptySlot,
-          fillColor: rowBg, alignment: 'center', margin: [2, 2],
-        });
+        // Empty cell — show blank
+        row.push({ text: '', fillColor: rowBg, margin: [0, 2] });
+        row.push({ text: '', fillColor: rowBg, margin: [2, 2] });
       }
     }
     body.push(row);
@@ -388,9 +387,8 @@ function buildSummaryTable(employees, startIdx, totalHours, scheduledCount, tota
     { text: '#', bold: true, fontSize: 10, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [3, 5], alignment: 'center' },
     { text: 'Employee', bold: true, fontSize: 10, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [3, 5], alignment: 'left' },
     { text: 'Type', bold: true, fontSize: 10, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [3, 5], alignment: 'center' },
-    { text: 'Max', bold: true, fontSize: 10, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [3, 5], alignment: 'center' },
+    { text: 'Max Hours', bold: true, fontSize: 10, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [3, 5], alignment: 'center' },
     { text: 'Scheduled', bold: true, fontSize: 10, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [3, 5], alignment: 'center' },
-    { text: 'Status', bold: true, fontSize: 10, color: COLORS.headerText, fillColor: COLORS.headerBg, margin: [3, 5], alignment: 'center' },
   ]];
 
   for (let i = 0; i < employees.length; i++) {
@@ -402,7 +400,6 @@ function buildSummaryTable(employees, startIdx, totalHours, scheduledCount, tota
     if (emp.employment_type === 'coop') empTypeLabel = 'Co-op/OPT';
     else if (emp.employment_type === 'external_coop') empTypeLabel = 'Ext. Co-op';
 
-    // Name cell
     let nameCell;
     if (emp.is_trainee) {
       nameCell = {
@@ -419,41 +416,14 @@ function buildSummaryTable(employees, startIdx, totalHours, scheduledCount, tota
       };
     }
 
-    // Hours color based on how close to max
     const maxH = emp.max_hours || 20;
-    const ratio = maxH > 0 ? emp.hours / maxH : 0;
-    let hoursColor = COLORS.barGreen;
-    let statusText = 'On Target';
-    let statusColor = COLORS.barGreen;
-    if (emp.hours === 0) {
-      hoursColor = COLORS.emptySlot;
-      statusText = 'Unscheduled';
-      statusColor = COLORS.emptySlot;
-    } else if (emp.hours > maxH) {
-      hoursColor = COLORS.barRed;
-      statusText = `+${(emp.hours - maxH).toFixed(1)}h over`;
-      statusColor = COLORS.barRed;
-    } else if (ratio >= 0.95) {
-      hoursColor = COLORS.barGreen;
-      statusText = 'On Target';
-      statusColor = COLORS.barGreen;
-    } else if (ratio >= 0.85) {
-      hoursColor = COLORS.barAmber;
-      statusText = `${(maxH - emp.hours).toFixed(1)}h under`;
-      statusColor = COLORS.barAmber;
-    } else {
-      hoursColor = COLORS.barRed;
-      statusText = `${(maxH - emp.hours).toFixed(1)}h under`;
-      statusColor = COLORS.barRed;
-    }
 
     body.push([
       { text: String(idx + 1), fontSize: 9, bold: true, color: COLORS.timeText, fillColor: rowBg, alignment: 'center', margin: [3, 5] },
       nameCell,
       { text: empTypeLabel, fontSize: 8.5, color: COLORS.timeText, fillColor: rowBg, alignment: 'center', margin: [3, 5] },
-      { text: `${maxH}h`, fontSize: 10, color: COLORS.timeText, fillColor: rowBg, alignment: 'center', margin: [3, 5] },
-      { text: emp.hours > 0 ? emp.hours.toFixed(1) + 'h' : '0h', fontSize: 11, bold: true, color: hoursColor, fillColor: rowBg, alignment: 'center', margin: [3, 5] },
-      { text: statusText, fontSize: 8, bold: true, color: statusColor, fillColor: rowBg, alignment: 'center', margin: [3, 5] },
+      { text: `${maxH}h`, fontSize: 10, color: COLORS.cellText, fillColor: rowBg, alignment: 'center', margin: [3, 5] },
+      { text: emp.hours > 0 ? emp.hours.toFixed(1) + 'h' : '0h', fontSize: 11, bold: true, color: COLORS.cellText, fillColor: rowBg, alignment: 'center', margin: [3, 5] },
     ]);
   }
 
@@ -461,15 +431,15 @@ function buildSummaryTable(employees, startIdx, totalHours, scheduledCount, tota
   if (totalHours !== undefined) {
     body.push([
       { text: '', fillColor: COLORS.totalRowBg, margin: [3, 6] },
-      { text: `Total (${scheduledCount}/${totalCount} scheduled)`, bold: true, fontSize: 11, color: COLORS.totalRowText, fillColor: COLORS.totalRowBg, margin: [3, 6], colSpan: 3 },
-      {}, {},
-      { text: totalHours.toFixed(1) + 'h', bold: true, fontSize: 12, color: COLORS.totalRowText, fillColor: COLORS.totalRowBg, alignment: 'center', margin: [3, 6] },
+      { text: `Total (${scheduledCount}/${totalCount} scheduled)`, bold: true, fontSize: 11, color: COLORS.totalRowText, fillColor: COLORS.totalRowBg, margin: [3, 6], colSpan: 2 },
+      {},
       { text: '', fillColor: COLORS.totalRowBg, margin: [3, 6] },
+      { text: totalHours.toFixed(1) + 'h', bold: true, fontSize: 12, color: COLORS.totalRowText, fillColor: COLORS.totalRowBg, alignment: 'center', margin: [3, 6] },
     ]);
   }
 
   return {
-    table: { headerRows: 1, widths: [25, '*', 65, 35, 55, 55], body },
+    table: { headerRows: 1, widths: [25, '*', 65, 50, 60], body },
     layout: {
       hLineWidth: (i) => (i <= 1 ? 1.0 : 0.4),
       vLineWidth: () => 0.4,
