@@ -113,17 +113,28 @@ async function generatePDF(weekStart) {
     orderDaysMap[row.order_type].push(row.day_of_week);
   }
 
-  // Build schedule data
+  // Load per-day/period slot count overrides so PDF respects the "-" button reductions
+  const settingsRows = await db('schedule_settings').where({ week_start_date: weekStart });
+  const slotCountMap = {};
+  for (const row of settingsRows) {
+    slotCountMap[`${row.day_of_week}-${row.shift_period}`] = row.employee_count;
+  }
+
+  // Build schedule data — filter out orphans beyond current slot count
   const scheduleData = {};
   for (const s of schedules) {
     const key = `${s.day_of_week}-${s.shift_period}`;
+    const cap = slotCountMap[key];
+    if (cap !== undefined && s.slot_index >= cap) continue;
     if (!scheduleData[key]) scheduleData[key] = [];
     scheduleData[key].push(s);
   }
 
-  // Calculate hours per employee
+  // Calculate hours per employee — skip orphans beyond current slot count
   const employeeHours = {};
   for (const s of schedules) {
+    const cap = slotCountMap[`${s.day_of_week}-${s.shift_period}`];
+    if (cap !== undefined && s.slot_index >= cap) continue;
     if (s.employee_id) {
       const hours = calcHours(s.start_time, s.end_time);
       const roles = parseRoles(s.employee_role);

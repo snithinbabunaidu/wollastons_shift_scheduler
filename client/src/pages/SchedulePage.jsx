@@ -268,6 +268,7 @@ export default function SchedulePage() {
 
   const handleExportPDF = async () => {
     try {
+      if (dirty) await handleSave();
       const res = await api.downloadPDF(weekStart);
       const url = window.URL.createObjectURL(new Blob([res.data]));
       const link = document.createElement('a');
@@ -287,6 +288,23 @@ export default function SchedulePage() {
     const current = slotCounts[key] || 5;
     const newCount = Math.max(1, Math.min(10, current + delta));
     setSlotCounts(prev => ({ ...prev, [key]: newCount }));
+
+    // When reducing, drop any schedule state entries for removed slot indices
+    // so the next save sends a lower maxSlot and the server cleans up orphans.
+    if (delta < 0) {
+      setSchedule(prev => {
+        const next = { ...prev };
+        for (const k of Object.keys(next)) {
+          const entry = next[k];
+          if (entry?.day_of_week === day && entry?.shift_period === period && entry?.slot_index >= newCount) {
+            delete next[k];
+          }
+        }
+        return next;
+      });
+      setDirty(true);
+    }
+
     try {
       await api.updateScheduleSettings(weekStart, [
         { day_of_week: day, shift_period: period, employee_count: newCount },
